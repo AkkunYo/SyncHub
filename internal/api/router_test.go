@@ -1,0 +1,1116 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	stdsync "sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/AkkunYo/SyncHub/internal/config"
+	"github.com/AkkunYo/SyncHub/internal/discovery"
+	"github.com/AkkunYo/SyncHub/internal/platform"
+	"github.com/AkkunYo/SyncHub/internal/reconcile"
+	syncservice "github.com/AkkunYo/SyncHub/internal/sync"
+)
+
+const (
+	testRequestID = "req_generated_01"
+	testSecret    = "credential-fixture-value"
+)
+
+type fakeConfigStore struct {
+	mu        stdsync.Mutex
+	cfg       config.Config
+	updateErr error
+	updates   int
+}
+
+func (s *fakeConfigStore) Snapshot() config.Config {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return cloneConfig(s.cfg)
+}
+
+func (s *fakeConfigStore) Update(ctx context.Context, mutate func(*config.Config) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	next := cloneConfig(s.cfg)
+	if err := mutate(&next); err != nil {
+		return err
+	}
+	if s.updateErr != nil {
+		return s.updateErr
+	}
+	if err := config.Validate(&next); err != nil {
+		return err
+	}
+	s.cfg = cloneConfig(next)
+	s.updates++
+	return nil
+}
+
+type fakeTarget struct {
+	channels    []platform.Channel
+	listErr     error
+	updateErr   error
+	deleteErr   error
+	updateOut   platform.Channel
+	listCalls   int
+	updateCalls int
+	deleteCalls int
+	updatedID   string
+	updated     platform.UpdateChannelInput
+	deletedID   string
+	listFn      func(context.Context) ([]platform.Channel, error)
+}
+
+func (t *fakeTarget) ListChannels(ctx context.Context) ([]platform.Channel, error) {
+	t.listCalls++
+	if t.listFn != nil {
+		return t.listFn(ctx)
+	}
+	if t.listErr != nil {
+		return nil, t.listErr
+	}
+	return append([]platform.Channel(nil), t.channels...), nil
+}
+
+func (t *fakeTarget) CreateChannel(context.Context, platform.CreateChannelInput) (platform.Channel, error) {
+	return platform.Channel{}, errors.New("unexpected direct create")
+}
+
+func (t *fakeTarget) UpdateChannel(_ context.Context, id string, input platform.UpdateChannelInput) (platform.Channel, error) {
+	t.updateCalls++
+	t.updatedID = id
+	t.updated = input
+	if t.updateErr != nil {
+		return platform.Channel{}, t.updateErr
+	}
+	return t.updateOut, nil
+}
+
+func (t *fakeTarget) DeleteChannel(_ context.Context, id string) error {
+	t.deleteCalls++
+	t.deletedID = id
+	return t.deleteErr
+}
+
+type fakeUpstream struct {
+	pages          []platform.AssetPage
+	listErr        error
+	listCalls      int
+	resolveCalls   int
+	resolvedGrant  platform.SecretGrant
+	resolvedAsset  string
+	resolvedSecret platform.ResolvedSecret
+}
+
+func (u *fakeUpstream) Capabilities(context.Context) (platform.SourceCapabilities, error) {
+	return platform.SourceCapabilities{}, nil
+}
+
+func (u *fakeUpstream) ListAssets(_ context.Context, cursor platform.PageCursor) (platform.AssetPage, error) {
+	u.listCalls++
+	if u.listErr != nil {
+		return platform.AssetPage{}, u.listErr
+	}
+	index := cursor.Page
+	if index < 0 || index >= len(u.pages) {
+		return platform.AssetPage{Assets: []platform.UpstreamAsset{}}, nil
+	}
+	return u.pages[index], nil
+}
+
+func (u *fakeUpstream) ResolveSecret(_ context.Context, assetID string, grant platform.SecretGrant) (platform.ResolvedSecret, error) {
+	u.resolveCalls++
+	u.resolvedAsset = assetID
+	u.resolvedGrant = grant
+	return u.resolvedSecret, nil
+}
+
+type targetResolution struct {
+	adapter      platform.TargetAdapter
+	capabilities platform.TargetCapabilities
+	err          error
+}
+
+type fakeResolver struct {
+	mu            stdsync.Mutex
+	targets       map[string]targetResolution
+	upstreams     map[string]platform.UpstreamAdapter
+	upstreamErr   map[string]error
+	targetCalls   []string
+	upstreamCalls []string
+}
+
+func (r *fakeResolver) ResolveTarget(_ context.Context, cfg config.TargetConfig) (platform.TargetAdapter, platform.TargetCapabilities, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.targetCalls = append(r.targetCalls, cfg.ID)
+	resolved, ok := r.targets[cfg.ID]
+	if !ok {
+		return nil, platform.TargetCapabilities{}, errors.New("target adapter unavailable")
+	}
+	return resolved.adapter, resolved.capabilities, resolved.err
+}
+
+func (r *fakeResolver) ResolveUpstream(_ context.Context, cfg config.UpstreamConfig) (platform.UpstreamAdapter, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.upstreamCalls = append(r.upstreamCalls, cfg.ID)
+	if err := r.upstreamErr[cfg.ID]; err != nil {
+		return nil, err
+	}
+	adapter, ok := r.upstreams[cfg.ID]
+	if !ok {
+		return nil, errors.New("upstream adapter unavailable")
+	}
+	return adapter, nil
+}
+
+type fakeDiscovery struct {
+	mu           stdsync.Mutex
+	snapshots    map[string]discovery.Snapshot
+	refreshErr   error
+	refreshCalls int
+}
+
+func (d *fakeDiscovery) Refresh(_ context.Context, sourceID string, _ platform.UpstreamAdapter) (discovery.Snapshot, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.refreshCalls++
+	if d.refreshErr != nil {
+		return discovery.Snapshot{}, d.refreshErr
+	}
+	snapshot := cloneDiscoverySnapshot(d.snapshots[sourceID])
+	return snapshot, nil
+}
+
+func (d *fakeDiscovery) Snapshot(sourceID string) (discovery.Snapshot, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	snapshot, ok := d.snapshots[sourceID]
+	return cloneDiscoverySnapshot(snapshot), ok
+}
+
+type fakeSyncService struct {
+	mu          stdsync.Mutex
+	result      syncservice.BatchResult
+	err         error
+	calls       int
+	sourceID    string
+	concurrency int
+	request     syncservice.BatchRequest
+	fn          func(context.Context, string, int, syncservice.BatchRequest) (syncservice.BatchResult, error)
+}
+
+func (s *fakeSyncService) Sync(ctx context.Context, sourceID string, concurrency int, request syncservice.BatchRequest) (syncservice.BatchResult, error) {
+	if s.fn != nil {
+		return s.fn(ctx, sourceID, concurrency, request)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	s.sourceID = sourceID
+	s.concurrency = concurrency
+	s.request = request
+	return s.result, s.err
+}
+
+type fakeMappings struct {
+	mu          stdsync.Mutex
+	byTarget    map[string][]platform.SyncMapping
+	listErr     error
+	deleteErr   error
+	updateErr   error
+	deleted     []platform.SyncMapping
+	updated     []platform.SyncMapping
+	listCalls   int
+	deleteCalls int
+	updateCalls int
+}
+
+func (m *fakeMappings) ListMappings(_ context.Context, targetID string) ([]platform.SyncMapping, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.listCalls++
+	if m.listErr != nil {
+		return nil, m.listErr
+	}
+	return cloneMappings(m.byTarget[targetID]), nil
+}
+
+func (m *fakeMappings) DeleteMappings(_ context.Context, mappings []platform.SyncMapping) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.deleteCalls++
+	m.deleted = cloneMappings(mappings)
+	return m.deleteErr
+}
+
+func (m *fakeMappings) UpdateMapping(_ context.Context, mapping platform.SyncMapping) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.updateCalls++
+	m.updated = append(m.updated, mapping)
+	return m.updateErr
+}
+
+type fakeReconcile struct {
+	report      reconcile.Report
+	checkErr    error
+	acceptErr   error
+	checkFn     func(context.Context, string, platform.TargetAdapter) (reconcile.Report, error)
+	checkCalls  int
+	acceptCalls int
+	checkedID   string
+	accepted    platform.SyncMapping
+	current     platform.Channel
+}
+
+func (r *fakeReconcile) Check(ctx context.Context, targetID string, target platform.TargetAdapter) (reconcile.Report, error) {
+	r.checkCalls++
+	r.checkedID = targetID
+	if r.checkFn != nil {
+		return r.checkFn(ctx, targetID, target)
+	}
+	return r.report, r.checkErr
+}
+
+func (r *fakeReconcile) AcceptDrift(_ context.Context, mapping platform.SyncMapping, current platform.Channel) error {
+	r.acceptCalls++
+	r.accepted = mapping
+	r.current = current
+	return r.acceptErr
+}
+
+type testEnvironment struct {
+	store      *fakeConfigStore
+	resolver   *fakeResolver
+	discovery  DiscoveryService
+	fakeDisc   *fakeDiscovery
+	syncer     *fakeSyncService
+	mappings   *fakeMappings
+	reconciler *fakeReconcile
+}
+
+func newTestEnvironment() *testEnvironment {
+	asset := platform.UpstreamAsset{
+		ID:             "source-a:channel:7:key:0",
+		SourceID:       "source-a",
+		SourceType:     "newapi",
+		Provider:       platform.ProviderOpenAI,
+		RawType:        "1",
+		Kind:           platform.AssetStaticAPIKey,
+		Name:           "OpenAI source",
+		Models:         []string{"gpt-4.1"},
+		Enabled:        true,
+		SecretReadable: true,
+	}
+	target := &fakeTarget{channels: []platform.Channel{}, updateOut: platform.Channel{
+		ID: "42", Name: "updated", Models: []string{"gpt-4.1"}, Group: "default", Weight: 100, Enabled: true,
+	}}
+	upstream := &fakeUpstream{}
+	disc := &fakeDiscovery{snapshots: map[string]discovery.Snapshot{
+		"source-a": {SourceID: "source-a", Assets: []platform.UpstreamAsset{asset}},
+	}}
+	return &testEnvironment{
+		store: &fakeConfigStore{cfg: config.Config{
+			App: config.AppConfig{
+				Host: "127.0.0.1", Port: 8888,
+				ReconcileInterval: config.Duration(5 * time.Minute),
+				RequestTimeout:    config.Duration(15 * time.Second), SyncConcurrency: 4,
+			},
+			Targets: []config.TargetConfig{{
+				ID: "target-a", Name: "Target A", Type: "newapi", BaseURL: "https://target.example.com", AccessToken: testSecret,
+			}},
+			Upstreams: []config.UpstreamConfig{{
+				ID: "source-a", Name: "Source A", Type: "newapi", BaseURL: "https://source.example.com", AccessToken: testSecret,
+			}},
+		}},
+		resolver: &fakeResolver{
+			targets: map[string]targetResolution{
+				"target-a": {
+					adapter: target,
+					capabilities: platform.TargetCapabilities{Platform: "newapi", Providers: map[string]platform.ProviderCapability{
+						platform.ProviderOpenAI: {Modes: []platform.SyncMode{platform.SyncModeStaticKey}},
+					}},
+				},
+			},
+			upstreams:   map[string]platform.UpstreamAdapter{"source-a": upstream},
+			upstreamErr: map[string]error{},
+		},
+		discovery: disc,
+		fakeDisc:  disc,
+		syncer: &fakeSyncService{result: syncservice.BatchResult{Targets: []syncservice.TargetResult{{
+			TargetID: "target-a", Status: syncservice.TargetSynced, ChannelID: "42",
+		}}}},
+		mappings:   &fakeMappings{byTarget: map[string][]platform.SyncMapping{}},
+		reconciler: &fakeReconcile{},
+	}
+}
+
+func (e *testEnvironment) dependencies() Dependencies {
+	return Dependencies{
+		Config:             e.store,
+		Adapters:           e.resolver,
+		Discovery:          e.discovery,
+		Sync:               e.syncer,
+		Mappings:           e.mappings,
+		Reconcile:          e.reconciler,
+		Version:            "v-test",
+		RequestIDGenerator: func() string { return testRequestID },
+	}
+}
+
+func (e *testEnvironment) router(t *testing.T) http.Handler {
+	t.Helper()
+	router, err := NewRouter(e.dependencies())
+	if err != nil {
+		t.Fatalf("NewRouter() error = %v", err)
+	}
+	return router
+}
+
+func request(t *testing.T, router http.Handler, method, path, body, contentType string) (*httptest.ResponseRecorder, map[string]any) {
+	t.Helper()
+	var reader io.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+	req := httptest.NewRequest(method, path, reader)
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+	var envelope map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("response is not JSON: status=%d body=%q error=%v", recorder.Code, recorder.Body.String(), err)
+	}
+	return recorder, envelope
+}
+
+func dataObject(t *testing.T, envelope map[string]any) map[string]any {
+	t.Helper()
+	data, ok := envelope["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data = %#v, want object", envelope["data"])
+	}
+	return data
+}
+
+func errorCode(t *testing.T, envelope map[string]any) string {
+	t.Helper()
+	errorObject, ok := envelope["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("error = %#v, want object", envelope["error"])
+	}
+	code, _ := errorObject["code"].(string)
+	return code
+}
+
+func TestHealthEnvelopeAndRequestID(t *testing.T) {
+	env := newTestEnvironment()
+	router := env.router(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	req.Header.Set("X-Request-ID", "client-request:01")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", recorder.Code)
+	}
+	if got := recorder.Header().Get("X-Request-ID"); got != "client-request:01" {
+		t.Fatalf("X-Request-ID = %q", got)
+	}
+	if got := recorder.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("X-Content-Type-Options = %q", got)
+	}
+	var envelope map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope["success"] != true || envelope["request_id"] != "client-request:01" {
+		t.Fatalf("envelope = %#v", envelope)
+	}
+	data := dataObject(t, envelope)
+	if data["status"] != "ok" || data["version"] != "v-test" {
+		t.Fatalf("health data = %#v", data)
+	}
+
+	invalid := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	invalid.Header.Set("X-Request-ID", "bad request id")
+	invalidRecorder := httptest.NewRecorder()
+	router.ServeHTTP(invalidRecorder, invalid)
+	if invalidRecorder.Header().Get("X-Request-ID") != testRequestID {
+		t.Fatalf("invalid request id was reused: %q", invalidRecorder.Header().Get("X-Request-ID"))
+	}
+}
+
+func TestStrictJSONAndBodyLimit(t *testing.T) {
+	router := newTestEnvironment().router(t)
+	valid := `{"host":"127.0.0.1","port":8888,"reconcile_interval":"5m","request_timeout":"15s","sync_concurrency":4}`
+	tests := []struct {
+		name        string
+		body        string
+		contentType string
+	}{
+		{name: "missing content type", body: valid},
+		{name: "wrong content type", body: valid, contentType: "text/plain"},
+		{name: "unknown field", body: strings.TrimSuffix(valid, "}") + `,"access_token":"not-accepted"}`, contentType: "application/json"},
+		{name: "multiple values", body: valid + `{}`, contentType: "application/json"},
+		{name: "trailing content", body: valid + `x`, contentType: "application/json"},
+		{name: "null", body: `null`, contentType: "application/json"},
+		{name: "oversized", body: `{"host":"` + strings.Repeat("a", (1<<20)+1) + `"}`, contentType: "application/json"},
+		{name: "encoded body", body: valid, contentType: "application/json"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPut, "/api/v1/config/app", strings.NewReader(test.body))
+			if test.contentType != "" {
+				req.Header.Set("Content-Type", test.contentType)
+			}
+			if test.name == "encoded body" {
+				req.Header.Set("Content-Encoding", "gzip")
+			}
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, req)
+			if recorder.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
+			}
+			var envelope map[string]any
+			if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
+				t.Fatal(err)
+			}
+			if got := errorCode(t, envelope); got != "invalid_request" {
+				t.Fatalf("code = %q", got)
+			}
+			if envelope["request_id"] == "" {
+				t.Fatal("request_id is empty")
+			}
+		})
+	}
+
+	recorder, envelope := request(t, router, http.MethodPut, "/api/v1/config/app", valid+" \n\t", "application/json; charset=utf-8")
+	if recorder.Code != http.StatusOK || envelope["success"] != true {
+		t.Fatalf("valid JSON with whitespace status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestConfigResponseIsRedactedAndDurationsAreStrings(t *testing.T) {
+	env := newTestEnvironment()
+	env.store.cfg.Targets[0].ManagementKey = "target-management-secret"
+	env.store.cfg.Targets[0].APIKey = "target-api-secret"
+	env.store.cfg.Upstreams[0].ManagementKey = "source-management-secret"
+	env.store.cfg.Upstreams[0].APIKey = "source-api-secret"
+	recorder, envelope := request(t, env.router(t), http.MethodGet, "/api/v1/config", "", "")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	body := recorder.Body.String()
+	for _, forbidden := range []string{
+		"access_token", "management_key", "api_key", testSecret,
+		"target-management-secret", "target-api-secret", "source-management-secret", "source-api-secret",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("response leaked %q: %s", forbidden, body)
+		}
+	}
+	app := dataObject(t, envelope)["app"].(map[string]any)
+	if app["reconcile_interval"] != "5m0s" || app["request_timeout"] != "15s" {
+		t.Fatalf("app durations = %#v", app)
+	}
+}
+
+func TestAppAndTargetConfigCRUD(t *testing.T) {
+	env := newTestEnvironment()
+	router := env.router(t)
+
+	appBody := `{"host":"localhost","port":9000,"reconcile_interval":"10m","request_timeout":"20s","sync_concurrency":8}`
+	recorder, _ := request(t, router, http.MethodPut, "/api/v1/config/app", appBody, "application/json")
+	if recorder.Code != http.StatusOK || env.store.cfg.App.Port != 9000 || env.store.cfg.App.SyncConcurrency != 8 {
+		t.Fatalf("app update failed: status=%d cfg=%#v", recorder.Code, env.store.cfg.App)
+	}
+
+	create := `{"id":"target-b","name":"Target B","type":"newapi","base_url":"https://target-b.example.com/","access_token":"` + testSecret + `"}`
+	recorder, envelope := request(t, router, http.MethodPost, "/api/v1/targets", create, "application/json")
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), testSecret) || strings.Contains(recorder.Body.String(), "access_token") {
+		t.Fatalf("create response leaked credential: %s", recorder.Body.String())
+	}
+	created := dataObject(t, envelope)
+	if created["id"] != "target-b" || created["base_url"] != "https://target-b.example.com" {
+		t.Fatalf("created target = %#v", created)
+	}
+	if recorder.Header().Get("Location") != "/api/v1/targets/target-b" {
+		t.Fatalf("Location = %q", recorder.Header().Get("Location"))
+	}
+
+	update := `{"name":"Target B renamed","base_url":"https://new-target.example.com"}`
+	recorder, _ = request(t, router, http.MethodPut, "/api/v1/targets/target-b", update, "application/json")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("update status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var updated config.TargetConfig
+	for _, target := range env.store.cfg.Targets {
+		if target.ID == "target-b" {
+			updated = target
+		}
+	}
+	if updated.AccessToken != testSecret || updated.Name != "Target B renamed" {
+		t.Fatalf("credential was not retained: %#v", updated)
+	}
+
+	invalidUpdate := `{"name":"Target B","base_url":"https://new-target.example.com","access_token":""}`
+	recorder, envelope = request(t, router, http.MethodPut, "/api/v1/targets/target-b", invalidUpdate, "application/json")
+	if recorder.Code != http.StatusBadRequest || errorCode(t, envelope) != "invalid_request" {
+		t.Fatalf("empty credential status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	recorder, _ = request(t, router, http.MethodDelete, "/api/v1/targets/target-b", "", "")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("delete status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if env.store.updates != 4 {
+		t.Fatalf("atomic update count = %d, want 4", env.store.updates)
+	}
+}
+
+func TestConfigResourceConflictsAndUpstreamCRUD(t *testing.T) {
+	env := newTestEnvironment()
+	mapping := platform.SyncMapping{UpstreamAssetID: "asset", TargetID: "target-a", TargetChannelID: "42"}
+	env.store.cfg.Upstreams[0].SyncMappings = []config.SyncMapping{mapping}
+	router := env.router(t)
+
+	recorder, envelope := request(t, router, http.MethodDelete, "/api/v1/targets/target-a", "", "")
+	if recorder.Code != http.StatusConflict || errorCode(t, envelope) != "resource_in_use" {
+		t.Fatalf("target conflict status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	recorder, envelope = request(t, router, http.MethodDelete, "/api/v1/upstreams/source-a", "", "")
+	if recorder.Code != http.StatusConflict || errorCode(t, envelope) != "resource_in_use" {
+		t.Fatalf("upstream conflict status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	create := `{"id":"source-b","name":"Source B","type":"sub2api","base_url":"https://source-b.example.com/","api_key":"` + testSecret + `"}`
+	recorder, envelope = request(t, router, http.MethodPost, "/api/v1/upstreams", create, "application/json")
+	if recorder.Code != http.StatusCreated || strings.Contains(recorder.Body.String(), testSecret) || strings.Contains(recorder.Body.String(), "api_key") {
+		t.Fatalf("create upstream status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if dataObject(t, envelope)["id"] != "source-b" {
+		t.Fatalf("created upstream = %#v", envelope)
+	}
+
+	update := `{"name":"Source B renamed","base_url":"https://source-b2.example.com"}`
+	recorder, _ = request(t, router, http.MethodPut, "/api/v1/upstreams/source-b", update, "application/json")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("update upstream status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var updated config.UpstreamConfig
+	for _, upstream := range env.store.cfg.Upstreams {
+		if upstream.ID == "source-b" {
+			updated = upstream
+		}
+	}
+	if updated.APIKey != testSecret || updated.Name != "Source B renamed" {
+		t.Fatalf("credential was not retained: %#v", updated)
+	}
+
+	recorder, _ = request(t, router, http.MethodDelete, "/api/v1/upstreams/source-b", "", "")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("delete upstream status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	recorder, envelope = request(t, router, http.MethodPost, "/api/v1/targets", `{"id":"target-a","name":"duplicate","type":"newapi","base_url":"https://duplicate.example.com","access_token":"x"}`, "application/json")
+	if recorder.Code != http.StatusBadRequest || errorCode(t, envelope) != "invalid_request" {
+		t.Fatalf("duplicate status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestTargetChannelsAreLiveAndAnnotated(t *testing.T) {
+	env := newTestEnvironment()
+	target := env.resolver.targets["target-a"].adapter.(*fakeTarget)
+	target.channels = []platform.Channel{
+		{ID: "42", Name: "managed", Provider: "openai", Models: []string{"gpt-4.1"}, Group: "default", Weight: 100, Enabled: true},
+		{ID: "99", Name: "native", Provider: "gemini", Models: []string{"gemini-2.5"}, Group: "default", Weight: 100, Enabled: true},
+	}
+	mapping := platform.SyncMapping{UpstreamAssetID: "source-a:channel:7:key:0", TargetID: "target-a", TargetChannelID: "42"}
+	env.mappings.byTarget["target-a"] = []platform.SyncMapping{mapping}
+
+	recorder, envelope := request(t, env.router(t), http.MethodGet, "/api/v1/targets/target-a/channels", "", "")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	channels := dataObject(t, envelope)["channels"].([]any)
+	managed := channels[0].(map[string]any)
+	native := channels[1].(map[string]any)
+	if managed["managed"] != true || managed["upstream_asset_id"] != mapping.UpstreamAssetID {
+		t.Fatalf("managed channel = %#v", managed)
+	}
+	if native["managed"] != false {
+		t.Fatalf("native channel = %#v", native)
+	}
+	if _, exists := native["upstream_asset_id"]; exists {
+		t.Fatalf("native channel has fabricated source: %#v", native)
+	}
+	if target.listCalls != 1 || env.mappings.listCalls != 1 {
+		t.Fatalf("calls list=%d mappings=%d", target.listCalls, env.mappings.listCalls)
+	}
+}
+
+func TestUpdateAndDeleteTargetChannelMaintainMappings(t *testing.T) {
+	env := newTestEnvironment()
+	target := env.resolver.targets["target-a"].adapter.(*fakeTarget)
+	mapping := platform.SyncMapping{
+		UpstreamAssetID: "source-a:channel:7:key:0", TargetID: "target-a", TargetChannelID: "42",
+		Snapshot: platform.ChannelSnapshot{Models: []string{"old"}, Group: "old", Weight: 50},
+	}
+	env.mappings.byTarget["target-a"] = []platform.SyncMapping{mapping}
+	target.updateOut = platform.Channel{ID: "42", Name: "renamed", BaseURL: "https://api.example.com", Models: []string{"gpt-4.1"}, Group: "default", Priority: 2, Weight: 100, Enabled: true}
+	router := env.router(t)
+
+	body := `{"name":"renamed","base_url":"https://api.example.com","models":["gpt-4.1"],"group":"default","priority":2,"weight":100,"enabled":true}`
+	recorder, _ := request(t, router, http.MethodPut, "/api/v1/targets/target-a/channels/42", body, "application/json")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("update status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if target.updatedID != "42" || target.updated.Weight != 100 || env.mappings.updateCalls != 1 {
+		t.Fatalf("update was not forwarded: target=%#v mappings=%#v", target.updated, env.mappings.updated)
+	}
+	if got := env.mappings.updated[0].Snapshot; got.Group != "default" || got.Priority != 2 || got.Weight != 100 {
+		t.Fatalf("snapshot = %#v", got)
+	}
+
+	recorder, _ = request(t, router, http.MethodDelete, "/api/v1/targets/target-a/channels/42", "", "")
+	if recorder.Code != http.StatusOK || target.deletedID != "42" || env.mappings.deleteCalls != 1 {
+		t.Fatalf("delete status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if len(env.mappings.deleted) != 1 || env.mappings.deleted[0].TargetChannelID != "42" {
+		t.Fatalf("deleted mappings = %#v", env.mappings.deleted)
+	}
+}
+
+func TestChannelErrorsAreMappedAndSanitized(t *testing.T) {
+	t.Run("channel not found", func(t *testing.T) {
+		env := newTestEnvironment()
+		target := env.resolver.targets["target-a"].adapter.(*fakeTarget)
+		target.updateErr = ErrChannelNotFound
+		body := `{"name":"renamed","base_url":"","models":["gpt-4.1"],"group":"default","priority":0,"weight":100,"enabled":true}`
+		recorder, envelope := request(t, env.router(t), http.MethodPut, "/api/v1/targets/target-a/channels/42", body, "application/json")
+		if recorder.Code != http.StatusNotFound || errorCode(t, envelope) != "channel_not_found" {
+			t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+	})
+
+	t.Run("upstream failure", func(t *testing.T) {
+		env := newTestEnvironment()
+		target := env.resolver.targets["target-a"].adapter.(*fakeTarget)
+		target.listErr = errors.New("Authorization: Bearer " + testSecret + " upstream-body")
+		recorder, envelope := request(t, env.router(t), http.MethodGet, "/api/v1/targets/target-a/channels", "", "")
+		if recorder.Code != http.StatusBadGateway || errorCode(t, envelope) != "upstream_failure" {
+			t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+		if strings.Contains(recorder.Body.String(), testSecret) || strings.Contains(recorder.Body.String(), "upstream-body") {
+			t.Fatalf("error leaked details: %s", recorder.Body.String())
+		}
+	})
+
+	t.Run("timeout", func(t *testing.T) {
+		env := newTestEnvironment()
+		target := env.resolver.targets["target-a"].adapter.(*fakeTarget)
+		target.listErr = context.DeadlineExceeded
+		recorder, envelope := request(t, env.router(t), http.MethodGet, "/api/v1/targets/target-a/channels", "", "")
+		if recorder.Code != http.StatusGatewayTimeout || errorCode(t, envelope) != "upstream_timeout" {
+			t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+	})
+
+	t.Run("mapping persistence after remote delete", func(t *testing.T) {
+		env := newTestEnvironment()
+		env.mappings.byTarget["target-a"] = []platform.SyncMapping{{UpstreamAssetID: "asset", TargetID: "target-a", TargetChannelID: "42"}}
+		env.mappings.deleteErr = errors.New("X-Security-Proof: " + testSecret)
+		recorder, envelope := request(t, env.router(t), http.MethodDelete, "/api/v1/targets/target-a/channels/42", "", "")
+		if recorder.Code != http.StatusConflict || errorCode(t, envelope) != "needs_reconcile" {
+			t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+		if strings.Contains(recorder.Body.String(), testSecret) {
+			t.Fatalf("error leaked proof: %s", recorder.Body.String())
+		}
+	})
+}
+
+func TestUpstreamRefreshAndAssetsNeverResolveSecrets(t *testing.T) {
+	env := newTestEnvironment()
+	upstream := env.resolver.upstreams["source-a"].(*fakeUpstream)
+	asset := platform.UpstreamAsset{
+		ID: "source-a:channel:8", SourceID: "source-a", SourceType: "newapi", Provider: "openai", RawType: "1",
+		Kind: platform.AssetStaticAPIKey, Name: "metadata only", Models: []string{"gpt-4.1"}, Enabled: true, SecretReadable: true,
+	}
+	upstream.pages = []platform.AssetPage{{Assets: []platform.UpstreamAsset{asset}}}
+	actualDiscovery := discovery.NewService()
+	env.discovery = actualDiscovery
+	router := env.router(t)
+
+	recorder, envelope := request(t, router, http.MethodPost, "/api/v1/upstreams/source-a/refresh", "", "")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("refresh status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if dataObject(t, envelope)["refreshed"] != true || upstream.listCalls != 1 || upstream.resolveCalls != 0 {
+		t.Fatalf("refresh data=%#v list=%d resolve=%d", envelope, upstream.listCalls, upstream.resolveCalls)
+	}
+
+	recorder, envelope = request(t, router, http.MethodGet, "/api/v1/upstreams/source-a/assets", "", "")
+	if recorder.Code != http.StatusOK || dataObject(t, envelope)["refreshed"] != true {
+		t.Fatalf("assets status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if upstream.resolveCalls != 0 || strings.Contains(recorder.Body.String(), "secret") && strings.Contains(recorder.Body.String(), testSecret) {
+		t.Fatalf("asset list resolved or leaked a secret: %s", recorder.Body.String())
+	}
+}
+
+func TestAssetsWithoutSnapshotAndQueryValidation(t *testing.T) {
+	env := newTestEnvironment()
+	env.fakeDisc.snapshots = map[string]discovery.Snapshot{}
+	router := env.router(t)
+	recorder, envelope := request(t, router, http.MethodGet, "/api/v1/upstreams/source-a/assets", "", "")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	data := dataObject(t, envelope)
+	if data["refreshed"] != false || len(data["assets"].([]any)) != 0 {
+		t.Fatalf("data=%#v", data)
+	}
+
+	recorder, envelope = request(t, router, http.MethodGet, "/api/v1/upstreams/source-a/assets?unexpected=1", "", "")
+	if recorder.Code != http.StatusBadRequest || errorCode(t, envelope) != "invalid_request" {
+		t.Fatalf("query status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestBatchSyncDeduplicatesTargetsAndKeepsGrantRequestScoped(t *testing.T) {
+	env := newTestEnvironment()
+	targetB := &fakeTarget{}
+	env.store.cfg.Targets = append(env.store.cfg.Targets, config.TargetConfig{
+		ID: "target-b", Name: "Target B", Type: "newapi", BaseURL: "https://target-b.example.com", AccessToken: testSecret,
+	})
+	env.resolver.targets["target-b"] = targetResolution{
+		adapter: targetB,
+		capabilities: platform.TargetCapabilities{Platform: "newapi", Providers: map[string]platform.ProviderCapability{
+			platform.ProviderOpenAI: {Modes: []platform.SyncMode{platform.SyncModeStaticKey}},
+		}},
+	}
+	env.syncer.result = syncservice.BatchResult{Targets: []syncservice.TargetResult{
+		{TargetID: "target-a", Status: syncservice.TargetSynced, ChannelID: "42"},
+		{TargetID: "target-b", Status: syncservice.TargetIncompatible, Code: "incompatible_target"},
+	}}
+	router := env.router(t)
+	proof := "proof-request-only"
+	body := `{"upstream_id":"source-a","asset_id":"source-a:channel:7:key:0","target_ids":["target-a","target-b","target-a"],"settings":{"models":["gpt-4.1"],"group":"default","priority":0,"weight":100},"grant":{"security_proof":"` + proof + `","allow_auth_file":false}}`
+	recorder, envelope := request(t, router, http.MethodPost, "/api/v1/sync", body, "application/json")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), proof) || strings.Contains(recorder.Body.String(), "security_proof") || strings.Contains(recorder.Body.String(), "allow_auth_file") {
+		t.Fatalf("response leaked request-only grant: %s", recorder.Body.String())
+	}
+	if env.syncer.calls != 1 || env.syncer.sourceID != "source-a" || env.syncer.concurrency != 4 {
+		t.Fatalf("sync call = %#v", env.syncer)
+	}
+	if len(env.syncer.request.Targets) != 2 || env.syncer.request.Targets[0].ID != "target-a" || env.syncer.request.Targets[1].ID != "target-b" {
+		t.Fatalf("targets = %#v", env.syncer.request.Targets)
+	}
+	if env.syncer.request.Grant.SecurityProof != proof || env.syncer.request.Grant.AllowAuthFile {
+		t.Fatalf("grant = %#v", env.syncer.request.Grant)
+	}
+	results := dataObject(t, envelope)["targets"].([]any)
+	if len(results) != 2 || results[0].(map[string]any)["status"] != "synced" || results[1].(map[string]any)["status"] != "incompatible" {
+		t.Fatalf("results = %#v", results)
+	}
+}
+
+func TestBatchSyncValidRequestReturnsPartialResultsDespiteServiceError(t *testing.T) {
+	env := newTestEnvironment()
+	env.syncer.result = syncservice.BatchResult{Targets: []syncservice.TargetResult{{
+		TargetID: "target-a", Status: syncservice.TargetNeedsReconcile, Code: "mapping_persist_failed", ChannelID: "42", Retryable: true,
+	}}}
+	env.syncer.err = errors.New("upstream response " + testSecret)
+	body := `{"upstream_id":"source-a","asset_id":"source-a:channel:7:key:0","target_ids":["target-a"],"settings":{"models":["gpt-4.1"],"group":"default","priority":0,"weight":100},"grant":{"security_proof":"proof"}}`
+	recorder, envelope := request(t, env.router(t), http.MethodPost, "/api/v1/sync", body, "application/json")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), testSecret) {
+		t.Fatalf("response leaked service error: %s", recorder.Body.String())
+	}
+	result := dataObject(t, envelope)["targets"].([]any)[0].(map[string]any)
+	if result["status"] != "needs_reconcile" || result["code"] != "needs_reconcile" || result["retryable"] != true {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestBatchSyncRequestErrors(t *testing.T) {
+	tests := []struct {
+		name   string
+		body   string
+		status int
+		code   string
+	}{
+		{name: "asset missing", body: `{"upstream_id":"source-a","asset_id":"missing","target_ids":["target-a"],"settings":{"models":["gpt-4.1"],"group":"default","priority":0,"weight":100}}`, status: 404, code: "asset_not_found"},
+		{name: "target missing", body: `{"upstream_id":"source-a","asset_id":"source-a:channel:7:key:0","target_ids":["missing"],"settings":{"models":["gpt-4.1"],"group":"default","priority":0,"weight":100}}`, status: 404, code: "target_not_found"},
+		{name: "upstream missing", body: `{"upstream_id":"missing","asset_id":"source-a:channel:7:key:0","target_ids":["target-a"],"settings":{"models":["gpt-4.1"],"group":"default","priority":0,"weight":100}}`, status: 404, code: "upstream_not_found"},
+		{name: "empty targets", body: `{"upstream_id":"source-a","asset_id":"source-a:channel:7:key:0","target_ids":[],"settings":{"models":["gpt-4.1"],"group":"default","priority":0,"weight":100}}`, status: 400, code: "invalid_request"},
+		{name: "duplicate models", body: `{"upstream_id":"source-a","asset_id":"source-a:channel:7:key:0","target_ids":["target-a"],"settings":{"models":["gpt-4.1","gpt-4.1"],"group":"default","priority":0,"weight":100}}`, status: 400, code: "invalid_request"},
+		{name: "negative weight", body: `{"upstream_id":"source-a","asset_id":"source-a:channel:7:key:0","target_ids":["target-a"],"settings":{"models":["gpt-4.1"],"group":"default","priority":0,"weight":-1}}`, status: 400, code: "invalid_request"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder, envelope := request(t, newTestEnvironment().router(t), http.MethodPost, "/api/v1/sync", test.body, "application/json")
+			if recorder.Code != test.status || errorCode(t, envelope) != test.code {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestConcurrentSyncForSameTupleIsSerialized(t *testing.T) {
+	env := newTestEnvironment()
+	entered := make(chan struct{}, 2)
+	release := make(chan struct{})
+	var calls atomic.Int32
+	var active atomic.Int32
+	var maximum atomic.Int32
+	env.syncer.fn = func(_ context.Context, _ string, _ int, request syncservice.BatchRequest) (syncservice.BatchResult, error) {
+		calls.Add(1)
+		current := active.Add(1)
+		for {
+			old := maximum.Load()
+			if current <= old || maximum.CompareAndSwap(old, current) {
+				break
+			}
+		}
+		entered <- struct{}{}
+		<-release
+		active.Add(-1)
+		return syncservice.BatchResult{Targets: []syncservice.TargetResult{{TargetID: request.Targets[0].ID, Status: syncservice.TargetSynced, ChannelID: "42"}}}, nil
+	}
+	router := env.router(t)
+	body := `{"upstream_id":"source-a","asset_id":"source-a:channel:7:key:0","target_ids":["target-a"],"settings":{"models":["gpt-4.1"],"group":"default","priority":0,"weight":100}}`
+
+	done := make(chan struct{}, 2)
+	call := func() {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/sync", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(httptest.NewRecorder(), req)
+		done <- struct{}{}
+	}
+	go call()
+	<-entered
+	go call()
+	time.Sleep(40 * time.Millisecond)
+	if calls.Load() != 1 {
+		t.Fatalf("same tuple entered %d sync calls concurrently", calls.Load())
+	}
+	close(release)
+	<-done
+	<-done
+	if maximum.Load() != 1 || calls.Load() != 2 {
+		t.Fatalf("maximum=%d calls=%d", maximum.Load(), calls.Load())
+	}
+}
+
+func TestMatrixCombinesAssetsTargetsMappingsAndCompatibility(t *testing.T) {
+	env := newTestEnvironment()
+	unknown := platform.UpstreamAsset{
+		ID: "source-a:channel:unknown", SourceID: "source-a", SourceType: "newapi", Provider: platform.ProviderUnknown,
+		Kind: platform.AssetStaticAPIKey, Name: "unknown", Models: []string{}, Enabled: true,
+	}
+	snapshot := env.fakeDisc.snapshots["source-a"]
+	snapshot.Assets = append(snapshot.Assets, unknown)
+	env.fakeDisc.snapshots["source-a"] = snapshot
+	env.store.cfg.Upstreams[0].SyncMappings = []config.SyncMapping{{
+		UpstreamAssetID: "source-a:channel:7:key:0", TargetID: "target-a", TargetChannelID: "42",
+	}}
+
+	recorder, envelope := request(t, env.router(t), http.MethodGet, "/api/v1/matrix?upstream_id=source-a", "", "")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	data := dataObject(t, envelope)
+	if data["upstream_id"] != "source-a" || data["refreshed"] != true {
+		t.Fatalf("matrix data=%#v", data)
+	}
+	rows := data["rows"].([]any)
+	first := rows[0].(map[string]any)["cells"].([]any)[0].(map[string]any)
+	second := rows[1].(map[string]any)["cells"].([]any)[0].(map[string]any)
+	if first["status"] != "synced" || first["channel_id"] != "42" || second["status"] != "incompatible" {
+		t.Fatalf("matrix cells first=%#v second=%#v", first, second)
+	}
+}
+
+func TestReconcileAndAcceptDriftUseLiveTargetState(t *testing.T) {
+	env := newTestEnvironment()
+	mapping := platform.SyncMapping{
+		UpstreamAssetID: "source-a:channel:7:key:0", TargetID: "target-a", TargetChannelID: "42",
+		Snapshot: platform.ChannelSnapshot{Models: []string{"old"}, Group: "default", Weight: 100},
+	}
+	env.mappings.byTarget["target-a"] = []platform.SyncMapping{mapping}
+	env.reconciler.report = reconcile.Report{TargetID: "target-a", Mappings: []reconcile.MappingState{{
+		Mapping: mapping, Status: reconcile.StatusDrifted,
+		Drift: map[string]reconcile.FieldDrift{"models": {Expected: []string{"old"}, Actual: []string{"gpt-4.1"}}},
+	}}}
+	target := env.resolver.targets["target-a"].adapter.(*fakeTarget)
+	target.channels = []platform.Channel{{ID: "42", Name: "live", Models: []string{"gpt-4.1"}, Group: "default", Weight: 100, Enabled: true}}
+	router := env.router(t)
+
+	recorder, envelope := request(t, router, http.MethodPost, "/api/v1/targets/target-a/reconcile", "", "")
+	if recorder.Code != http.StatusOK || env.reconciler.checkCalls != 1 || env.reconciler.checkedID != "target-a" {
+		t.Fatalf("reconcile status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if dataObject(t, envelope)["target_id"] != "target-a" {
+		t.Fatalf("report=%#v", envelope)
+	}
+
+	body := `{"upstream_asset_id":"source-a:channel:7:key:0","channel_id":"42"}`
+	recorder, envelope = request(t, router, http.MethodPost, "/api/v1/targets/target-a/drift/accept", body, "application/json")
+	if recorder.Code != http.StatusOK || env.reconciler.acceptCalls != 1 {
+		t.Fatalf("accept status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if env.reconciler.accepted.UpstreamAssetID != mapping.UpstreamAssetID || env.reconciler.current.Models[0] != "gpt-4.1" {
+		t.Fatalf("accepted mapping=%#v current=%#v", env.reconciler.accepted, env.reconciler.current)
+	}
+	accepted := dataObject(t, envelope)["mapping"].(map[string]any)
+	snapshot := accepted["snapshot"].(map[string]any)
+	if snapshot["models"].([]any)[0] != "gpt-4.1" {
+		t.Fatalf("accepted response=%#v", accepted)
+	}
+}
+
+func TestAcceptDriftRejectsMissingLiveChannelAndClientSnapshot(t *testing.T) {
+	env := newTestEnvironment()
+	env.mappings.byTarget["target-a"] = []platform.SyncMapping{{UpstreamAssetID: "asset-a", TargetID: "target-a", TargetChannelID: "42"}}
+	router := env.router(t)
+
+	body := `{"upstream_asset_id":"asset-a","channel_id":"42"}`
+	recorder, envelope := request(t, router, http.MethodPost, "/api/v1/targets/target-a/drift/accept", body, "application/json")
+	if recorder.Code != http.StatusNotFound || errorCode(t, envelope) != "channel_not_found" {
+		t.Fatalf("missing channel status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	withSnapshot := `{"upstream_asset_id":"asset-a","channel_id":"42","models":["client-value"]}`
+	recorder, envelope = request(t, router, http.MethodPost, "/api/v1/targets/target-a/drift/accept", withSnapshot, "application/json")
+	if recorder.Code != http.StatusBadRequest || errorCode(t, envelope) != "invalid_request" {
+		t.Fatalf("client snapshot status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestNotFoundBodylessAndFallbackRoutesUseEnvelope(t *testing.T) {
+	env := newTestEnvironment()
+	router := env.router(t)
+
+	tests := []struct {
+		method string
+		path   string
+		body   string
+		status int
+		code   string
+	}{
+		{method: http.MethodGet, path: "/api/v1/targets/missing/channels", status: 404, code: "target_not_found"},
+		{method: http.MethodPost, path: "/api/v1/upstreams/missing/refresh", status: 404, code: "upstream_not_found"},
+		{method: http.MethodGet, path: "/api/v1/does-not-exist", status: 400, code: "invalid_request"},
+		{method: http.MethodPatch, path: "/api/v1/config", status: 400, code: "invalid_request"},
+		{method: http.MethodDelete, path: "/api/v1/targets/target-a", body: `{}`, status: 400, code: "invalid_request"},
+	}
+	for _, test := range tests {
+		req := httptest.NewRequest(test.method, test.path, strings.NewReader(test.body))
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, req)
+		if recorder.Code != test.status {
+			t.Fatalf("%s %s status=%d body=%s", test.method, test.path, recorder.Code, recorder.Body.String())
+		}
+		var envelope map[string]any
+		if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
+			t.Fatal(err)
+		}
+		if errorCode(t, envelope) != test.code || envelope["request_id"] == "" {
+			t.Fatalf("%s %s envelope=%#v", test.method, test.path, envelope)
+		}
+	}
+}
+
+func TestPanicRecoveryDoesNotExposeStackOrHeaders(t *testing.T) {
+	env := newTestEnvironment()
+	target := env.resolver.targets["target-a"].adapter.(*fakeTarget)
+	target.listFn = func(context.Context) ([]platform.Channel, error) {
+		panic("Authorization: Bearer " + testSecret)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/targets/target-a/channels", nil)
+	req.Header.Set("Authorization", "Bearer "+testSecret)
+	recorder := httptest.NewRecorder()
+	env.router(t).ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), testSecret) || strings.Contains(recorder.Body.String(), "panic") || strings.Contains(recorder.Body.String(), "goroutine") {
+		t.Fatalf("panic response leaked details: %s", recorder.Body.String())
+	}
+	var envelope map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if errorCode(t, envelope) != "internal_error" || envelope["request_id"] == "" {
+		t.Fatalf("envelope=%#v", envelope)
+	}
+}
+
+func TestNewRouterRejectsMissingDependencies(t *testing.T) {
+	_, err := NewRouter(Dependencies{})
+	if err == nil {
+		t.Fatal("NewRouter() accepted missing dependencies")
+	}
+}
+
+func cloneConfig(cfg config.Config) config.Config {
+	cloned := cfg
+	cloned.Targets = append([]config.TargetConfig(nil), cfg.Targets...)
+	cloned.Upstreams = append([]config.UpstreamConfig(nil), cfg.Upstreams...)
+	for i := range cloned.Upstreams {
+		cloned.Upstreams[i].SyncMappings = cloneMappings(cfg.Upstreams[i].SyncMappings)
+	}
+	return cloned
+}
+
+func cloneMappings(mappings []platform.SyncMapping) []platform.SyncMapping {
+	cloned := append([]platform.SyncMapping(nil), mappings...)
+	for i := range cloned {
+		cloned[i].Snapshot.Models = append([]string(nil), mappings[i].Snapshot.Models...)
+	}
+	return cloned
+}
+
+func cloneDiscoverySnapshot(snapshot discovery.Snapshot) discovery.Snapshot {
+	cloned := snapshot
+	cloned.Assets = append([]platform.UpstreamAsset(nil), snapshot.Assets...)
+	for i := range cloned.Assets {
+		cloned.Assets[i].Models = append([]string(nil), snapshot.Assets[i].Models...)
+		if snapshot.Assets[i].Metadata != nil {
+			cloned.Assets[i].Metadata = make(map[string]string, len(snapshot.Assets[i].Metadata))
+			for key, value := range snapshot.Assets[i].Metadata {
+				cloned.Assets[i].Metadata[key] = value
+			}
+		}
+	}
+	return cloned
+}

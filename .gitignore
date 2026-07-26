@@ -1,0 +1,54 @@
+# Go build outputs
+/bin/
+/build/
+dist/
+/sync-hub
+/sync-hub.exe
+*.test
+*.out
+coverage.*
+
+# Go workspace and local tooling
+go.work
+go.work.sum
+/.codegraph/
+
+# Frontend dependencies and generated assets
+node_modules/
+.vite/
+*.tsbuildinfo
+coverage/
+
+# Runtime data and secrets
+/data/*.yaml
+/data/*.yml
+/data/*.lock
+/data/*.bak
+/data/.*.tmp-*
+!/data/*.example.yaml
+!/data/*.example.yml
+.env
+.env.*
+!.env.example
+*.local.yaml
+*.local.yml
+
+# Local product requirements and design documents
+/docs/
+
+# Logs and temporary files
+*.log
+tmp/
+temp/
+*.tmp
+*.swp
+*.swo
+
+# IDE settings
+.idea/
+.vscode/
+*.iml
+
+# Operating system files
+.DS_Store
+Thumbs.db
