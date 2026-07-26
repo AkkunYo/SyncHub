@@ -62,8 +62,18 @@ type UpstreamConfig struct {
 	APIKey        string        `json:"-" yaml:"api_key,omitempty"`
 	ManagementKey string        `json:"-" yaml:"management_key,omitempty"`
 	ProxyAPIKey   string        `json:"-" yaml:"proxy_api_key,omitempty"`
+	DiscoveryMode string        `json:"discovery_mode,omitempty" yaml:"discovery_mode,omitempty"`
+	ManageTokens  bool          `json:"manage_tokens,omitempty" yaml:"manage_tokens,omitempty"`
 	SyncMappings  []SyncMapping `json:"sync_mappings" yaml:"sync_mappings,omitempty"`
 }
+
+// New API discovery modes. Only newapi upstreams accept these values; the mode
+// is a hint for credential-privilege probing, not an override of it.
+const (
+	DiscoveryModeAuto    = "auto"
+	DiscoveryModeChannel = "channel"
+	DiscoveryModeToken   = "token"
+)
 
 type SyncMapping = platform.SyncMapping
 
@@ -179,6 +189,30 @@ func Validate(cfg *Config) error {
 		}
 		if upstream.Type != "cliproxyapi" && strings.TrimSpace(upstream.ProxyAPIKey) != "" {
 			return fmt.Errorf("upstream[%d].proxy_api_key is only supported for cliproxyapi", i)
+		}
+		upstream.DiscoveryMode = strings.ToLower(strings.TrimSpace(upstream.DiscoveryMode))
+		if upstream.Type == "newapi" {
+			if upstream.DiscoveryMode == "" {
+				upstream.DiscoveryMode = DiscoveryModeAuto
+			}
+			switch upstream.DiscoveryMode {
+			case DiscoveryModeAuto, DiscoveryModeChannel, DiscoveryModeToken:
+			default:
+				return fmt.Errorf("upstream[%d].discovery_mode %q is unsupported", i, upstream.DiscoveryMode)
+			}
+			// manage_tokens is a token-mode capability. Allowing it under channel
+			// mode would imply SyncHub creating tokens on a credential we are
+			// treating as Admin/Root, which contradicts the mode's intent.
+			if upstream.ManageTokens && upstream.DiscoveryMode == DiscoveryModeChannel {
+				return fmt.Errorf("upstream[%d].manage_tokens is not allowed in channel discovery mode", i)
+			}
+		} else {
+			if upstream.DiscoveryMode != "" {
+				return fmt.Errorf("upstream[%d].discovery_mode is only supported for newapi", i)
+			}
+			if upstream.ManageTokens {
+				return fmt.Errorf("upstream[%d].manage_tokens is only supported for newapi", i)
+			}
 		}
 		baseURL, err := normalizeBaseURL(upstream.BaseURL)
 		if err != nil {

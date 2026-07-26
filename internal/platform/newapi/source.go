@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -28,9 +26,9 @@ type Config struct {
 }
 
 type Source struct {
-	config  Config
-	client  *http.Client
-	catalog *platform.ProviderCatalog
+	config    Config
+	transport transport
+	catalog   *platform.ProviderCatalog
 
 	mu      sync.RWMutex
 	records map[string]assetRecord
@@ -107,8 +105,14 @@ func NewSource(cfg Config, client *http.Client) (*Source, error) {
 		client = &http.Client{}
 	}
 	return &Source{
-		config:  cfg,
-		client:  client,
+		config: cfg,
+		transport: transport{
+			baseURL:        cfg.BaseURL,
+			accessToken:    cfg.AccessToken,
+			userID:         cfg.UserID,
+			requestTimeout: cfg.RequestTimeout,
+			client:         client,
+		},
 		catalog: platform.DefaultCatalog(),
 		records: make(map[string]assetRecord),
 	}, nil
@@ -131,13 +135,11 @@ func (s *Source) ListAssets(ctx context.Context, cursor platform.PageCursor) (pl
 		pageSize = 100
 	}
 
-	requestURL := s.config.BaseURL + "/api/channel/"
 	query := url.Values{}
 	query.Set("p", strconv.Itoa(page))
 	query.Set("page_size", strconv.Itoa(pageSize))
-	requestURL += "?" + query.Encode()
 	var response channelListResponse
-	if err := s.doJSON(ctx, http.MethodGet, requestURL, "", &response); err != nil {
+	if err := s.transport.get(ctx, "/api/channel/", query.Encode(), &response); err != nil {
 		return platform.AssetPage{}, err
 	}
 	if !response.Success {
@@ -251,9 +253,12 @@ func (s *Source) ResolveSecret(ctx context.Context, assetID string, grant platfo
 		return platform.ResolvedSecret{}, platform.ErrSecretUnavailable
 	}
 
-	requestURL := s.config.BaseURL + "/api/channel/" + strconv.Itoa(record.channelID) + "/key"
 	var response channelKeyResponse
-	if err := s.doJSON(ctx, http.MethodPost, requestURL, proof, &response); err != nil {
+	if err := s.transport.do(ctx, request{
+		method: http.MethodPost,
+		path:   "/api/channel/" + strconv.Itoa(record.channelID) + "/key",
+		proof:  proof,
+	}, &response); err != nil {
 		return platform.ResolvedSecret{}, err
 	}
 	if !response.Success || response.Data.Key == "" {
@@ -305,40 +310,6 @@ func (s *Source) resolveRecord(assetID string) (assetRecord, error) {
 		return assetRecord{}, platform.ErrSecretUnavailable
 	}
 	return assetRecord{channelID: channelID, keyIndex: keyIndex, enabled: true, secretReadable: true}, nil
-}
-
-func (s *Source) doJSON(ctx context.Context, method, requestURL, proof string, destination any) error {
-	requestCtx, cancel := context.WithTimeout(ctx, s.config.RequestTimeout)
-	defer cancel()
-	request, err := http.NewRequestWithContext(requestCtx, method, requestURL, nil)
-	if err != nil {
-		return errors.New("failed to create New API request")
-	}
-	request.Header.Set("Authorization", "Bearer "+s.config.AccessToken)
-	request.Header.Set("Accept", "application/json")
-	if s.config.UserID > 0 {
-		request.Header.Set("New-Api-User", strconv.Itoa(s.config.UserID))
-	}
-	if proof != "" {
-		request.Header.Set("X-Security-Proof", proof)
-	}
-	response, err := s.client.Do(request)
-	if err != nil {
-		if requestCtx.Err() != nil {
-			return requestCtx.Err()
-		}
-		return errors.New("New API request failed")
-	}
-	defer response.Body.Close()
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 32<<10))
-		return fmt.Errorf("New API request returned status %d", response.StatusCode)
-	}
-	decoder := json.NewDecoder(io.LimitReader(response.Body, maxResponseBytes))
-	if err := decoder.Decode(destination); err != nil {
-		return errors.New("New API returned an invalid response")
-	}
-	return nil
 }
 
 func splitCSV(value string) []string {

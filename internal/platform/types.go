@@ -11,6 +11,8 @@ var (
 	ErrSecretGrantRequired = errors.New("secret grant required")
 	ErrSecretUnavailable   = errors.New("secret unavailable")
 	ErrAssetDisabled       = errors.New("asset disabled")
+	ErrRateLimited         = errors.New("upstream rate limited")
+	ErrGroupRequired       = errors.New("upstream group is required")
 )
 
 type AssetKind string
@@ -59,6 +61,32 @@ type UpstreamAsset struct {
 type SourceCapabilities struct {
 	AssetKinds       []AssetKind `json:"asset_kinds"`
 	SecretResolution bool        `json:"secret_resolution"`
+}
+
+// UpstreamGroup describes one scheduling group an upstream exposes. Ratio and
+// Models drive the operator's cost decision, so both carry an explicit
+// "is this value trustworthy" flag instead of a silent zero value.
+type UpstreamGroup struct {
+	Name           string   `json:"name"`
+	Description    string   `json:"description,omitempty"`
+	Ratio          float64  `json:"ratio"`
+	RatioKnown     bool     `json:"ratio_known"`
+	Models         []string `json:"models"`
+	ModelsVerified bool     `json:"models_verified"`
+	Auto           bool     `json:"auto"`
+}
+
+// GroupCatalog is the full set of groups the configured credential may use.
+type GroupCatalog struct {
+	SourceID     string          `json:"source_id"`
+	DefaultGroup string          `json:"default_group,omitempty"`
+	Groups       []UpstreamGroup `json:"groups"`
+}
+
+// GroupCatalogProvider is implemented by upstream adapters whose assets are
+// scoped to a billing group the operator must choose explicitly.
+type GroupCatalogProvider interface {
+	GroupCatalog(ctx context.Context) (GroupCatalog, error)
 }
 
 type SecretGrant struct {
@@ -143,6 +171,16 @@ type ChannelSnapshot struct {
 	Weight   int      `json:"weight" yaml:"weight"`
 }
 
+// UpstreamGroupSnapshot records the upstream billing group a mapping was
+// created against, so a later ratio or model change on the upstream side is
+// reported as drift instead of silently changing cost.
+type UpstreamGroupSnapshot struct {
+	Group      string   `json:"group" yaml:"group"`
+	Ratio      float64  `json:"ratio" yaml:"ratio"`
+	RatioKnown bool     `json:"ratio_known" yaml:"ratio_known"`
+	Models     []string `json:"models" yaml:"models,omitempty"`
+}
+
 type SyncMapping struct {
 	UpstreamAssetID     string          `json:"upstream_asset_id" yaml:"upstream_asset_id,omitempty"`
 	LegacyUpstreamKeyID string          `json:"-" yaml:"upstream_key_id,omitempty"`
@@ -151,12 +189,25 @@ type SyncMapping struct {
 	SourceProvider      string          `json:"source_provider" yaml:"source_provider"`
 	AssetKind           AssetKind       `json:"asset_kind" yaml:"asset_kind"`
 	Snapshot            ChannelSnapshot `json:"snapshot" yaml:"snapshot"`
+
+	// UpstreamGroup is only populated for assets whose upstream cost depends on
+	// a selected group, currently New API token assets.
+	UpstreamGroup *UpstreamGroupSnapshot `json:"upstream_group,omitempty" yaml:"upstream_group,omitempty"`
 }
 
 type UpstreamAdapter interface {
 	Capabilities(ctx context.Context) (SourceCapabilities, error)
 	ListAssets(ctx context.Context, cursor PageCursor) (AssetPage, error)
 	ResolveSecret(ctx context.Context, assetID string, grant SecretGrant) (ResolvedSecret, error)
+}
+
+// BatchSecretResolver is implemented by sources whose secret endpoint is rate
+// limited per request rather than per key, making one batched call materially
+// cheaper than N single calls. Adapters that do not implement it keep the
+// per-asset ResolveSecret behaviour unchanged.
+type BatchSecretResolver interface {
+	ResolveSecrets(ctx context.Context, assetIDs []string, grant SecretGrant) (map[string]ResolvedSecret, error)
+	MaxSecretBatchSize() int
 }
 
 type TargetAdapter interface {
