@@ -125,3 +125,9 @@ func statusError(status int) error {
 		return fmt.Errorf("New API request returned status %d", status)
 	}
 }
+
+func wipeTargetBytes(value []byte) {
+	for i := range value {
+		value[i] = 0
+	}
+}

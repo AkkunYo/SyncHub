@@ -1,12 +1,10 @@
 package newapi
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -33,9 +31,9 @@ type TargetConfig struct {
 }
 
 type Target struct {
-	config  TargetConfig
-	client  *http.Client
-	catalog *platform.ProviderCatalog
+	config    TargetConfig
+	transport transport
+	catalog   *platform.ProviderCatalog
 }
 
 type targetMutationResponse struct {
@@ -153,7 +151,17 @@ func NewTarget(cfg TargetConfig, client *http.Client) (*Target, error) {
 	if client == nil {
 		client = &http.Client{}
 	}
-	return &Target{config: cfg, client: client, catalog: platform.DefaultCatalog()}, nil
+	return &Target{
+		config: cfg,
+		transport: transport{
+			baseURL:        cfg.BaseURL,
+			accessToken:    cfg.AccessToken,
+			userID:         cfg.UserID,
+			requestTimeout: cfg.RequestTimeout,
+			client:         client,
+		},
+		catalog: platform.DefaultCatalog(),
+	}, nil
 }
 
 func (t *Target) Capabilities() platform.TargetCapabilities {
@@ -185,7 +193,7 @@ func (t *Target) listAllChannels(ctx context.Context) ([]platform.Channel, error
 		query.Set("page_size", strconv.Itoa(t.config.PageSize))
 
 		var response channelListResponse
-		if err := t.doJSON(ctx, http.MethodGet, "/api/channel/?"+query.Encode(), nil, &response); err != nil {
+		if err := t.transport.do(ctx, request{method: http.MethodGet, path: "/api/channel/", query: query.Encode()}, &response); err != nil {
 			return nil, err
 		}
 		if !response.Success {
@@ -268,7 +276,7 @@ func (t *Target) CreateChannel(ctx context.Context, input platform.CreateChannel
 	if err != nil {
 		return platform.Channel{}, err
 	}
-	request := createChannelRequest{
+	createReq := createChannelRequest{
 		Mode: mode,
 		Channel: createChannelPayload{
 			Type: rawType, Key: key, Status: 1, Name: name, Weight: input.Weight,
@@ -276,12 +284,12 @@ func (t *Target) CreateChannel(ctx context.Context, input platform.CreateChannel
 		},
 	}
 	if mode == "multi_to_single" {
-		request.MultiKeyMode = "polling"
+		createReq.MultiKeyMode = "polling"
 	}
 
 	var response targetMutationResponse
-	err = t.doJSON(ctx, http.MethodPost, "/api/channel/", request, &response)
-	request.Channel.Key = ""
+	err = t.transport.do(ctx, request{method: http.MethodPost, path: "/api/channel/", body: createReq}, &response)
+	createReq.Channel.Key = ""
 	key = ""
 	if err != nil {
 		return platform.Channel{}, err
@@ -368,7 +376,7 @@ func (t *Target) UpdateChannel(ctx context.Context, id string, input platform.Up
 		Models: strings.Join(normalizeTargetModels(input.Models), ","), Group: normalizeTargetGroup(input.Group), Priority: input.Priority,
 	}
 	var response targetMutationResponse
-	if err := t.doJSON(ctx, http.MethodPut, "/api/channel/", payload, &response); err != nil {
+	if err := t.transport.do(ctx, request{method: http.MethodPut, path: "/api/channel/", body: payload}, &response); err != nil {
 		return platform.Channel{}, err
 	}
 	if !response.Success {
@@ -385,9 +393,9 @@ func (t *Target) UpdateChannel(ctx context.Context, id string, input platform.Up
 	}
 	var statusResponse targetMutationResponse
 	statusPath := "/api/channel/" + strconv.Itoa(numericID) + "/status"
-	if err := t.doJSON(ctx, http.MethodPost, statusPath, struct {
+	if err := t.transport.do(ctx, request{method: http.MethodPost, path: statusPath, body: struct {
 		Status int `json:"status"`
-	}{Status: status}, &statusResponse); err != nil {
+	}{Status: status}}, &statusResponse); err != nil {
 		return platform.Channel{}, err
 	}
 	if !statusResponse.Success {
@@ -415,7 +423,7 @@ func (t *Target) DeleteChannel(ctx context.Context, id string) error {
 		return err
 	}
 	var response targetMutationResponse
-	if err := t.doJSON(ctx, http.MethodDelete, "/api/channel/"+strconv.Itoa(numericID), nil, &response); err != nil {
+	if err := t.transport.do(ctx, request{method: http.MethodDelete, path: "/api/channel/" + strconv.Itoa(numericID)}, &response); err != nil {
 		return err
 	}
 	if !response.Success {
@@ -429,7 +437,7 @@ func (t *Target) DeleteChannel(ctx context.Context, id string) error {
 
 func (t *Target) getChannel(ctx context.Context, id int) (platform.Channel, error) {
 	var response targetChannelResponse
-	if err := t.doJSON(ctx, http.MethodGet, "/api/channel/"+strconv.Itoa(id), nil, &response); err != nil {
+	if err := t.transport.get(ctx, "/api/channel/"+strconv.Itoa(id), "", &response); err != nil {
 		return platform.Channel{}, err
 	}
 	if !response.Success || response.Data.ID != id {
@@ -584,67 +592,3 @@ func validTargetBaseURL(value string) bool {
 	return err == nil && parsed.Host != "" && (parsed.Scheme == "http" || parsed.Scheme == "https")
 }
 
-func (t *Target) doJSON(ctx context.Context, method, path string, body any, destination any) error {
-	var encoded []byte
-	var err error
-	if body != nil {
-		encoded, err = json.Marshal(body)
-		if err != nil {
-			return errors.New("failed to encode New API target request")
-		}
-		defer wipeTargetBytes(encoded)
-	}
-
-	requestCtx, cancel := context.WithTimeout(ctx, t.config.RequestTimeout)
-	defer cancel()
-	request, err := http.NewRequestWithContext(requestCtx, method, t.config.BaseURL+path, bytes.NewReader(encoded))
-	if err != nil {
-		return errors.New("failed to create New API target request")
-	}
-	request.Header.Set("Accept", "application/json")
-	request.Header.Set("Authorization", "Bearer "+t.config.AccessToken)
-	if t.config.UserID > 0 {
-		request.Header.Set("New-Api-User", strconv.Itoa(t.config.UserID))
-	}
-	if body != nil {
-		request.Header.Set("Content-Type", "application/json")
-	}
-
-	response, err := t.client.Do(request)
-	if err != nil {
-		if requestCtx.Err() != nil {
-			return requestCtx.Err()
-		}
-		return errors.New("New API target request failed")
-	}
-	defer response.Body.Close()
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 32<<10))
-		return fmt.Errorf("New API target request returned status %d", response.StatusCode)
-	}
-
-	encodedResponse, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
-	if err != nil {
-		if requestCtx.Err() != nil {
-			return requestCtx.Err()
-		}
-		return errors.New("New API returned an invalid target response")
-	}
-	defer wipeTargetBytes(encodedResponse)
-	if len(encodedResponse) > maxResponseBytes {
-		return errors.New("New API returned an invalid target response")
-	}
-	if err := json.Unmarshal(encodedResponse, destination); err != nil {
-		if requestCtx.Err() != nil {
-			return requestCtx.Err()
-		}
-		return errors.New("New API returned an invalid target response")
-	}
-	return nil
-}
-
-func wipeTargetBytes(value []byte) {
-	for i := range value {
-		value[i] = 0
-	}
-}
