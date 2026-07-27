@@ -16,7 +16,7 @@ import (
 	"github.com/AkkunYo/SyncHub/internal/platform"
 )
 
-func TestTargetListsChannelsFromMetadataWithoutReadingStaticConfig(t *testing.T) {
+func TestTargetListsChannelsFromAuthFilesAndStaticConfigs(t *testing.T) {
 	t.Parallel()
 
 	var staticReads atomic.Int32
@@ -61,12 +61,55 @@ func TestTargetListsChannelsFromMetadataWithoutReadingStaticConfig(t *testing.T)
 	if got := channels[1]; got.ID != "codex-oauth-real-id" || got.Provider != platform.ProviderCodex || got.Enabled || got.Group != "default" || got.Weight != 100 {
 		t.Fatalf("OAuth channel = %#v", got)
 	}
-	if staticReads.Load() != 0 {
-		t.Fatalf("metadata listing made %d static configuration requests", staticReads.Load())
+	if staticReads.Load() != int32(len(knownStaticRoutes)) {
+		t.Fatalf("expected %d static config reads, got %d", len(knownStaticRoutes), staticReads.Load())
 	}
 	capabilities := target.Capabilities()
 	if capabilities.Platform != "cliproxyapi" || capabilities.NativeAuthSchema != "cpa-auth-v1" {
 		t.Fatalf("Capabilities() = %#v", capabilities)
+	}
+}
+
+func TestTargetListsManuallyConfiguredStaticChannels(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v0/management/auth-files":
+			_, _ = fmt.Fprint(w, `{"files":[]}`)
+		case "/v0/management/auth-files/models":
+			_, _ = fmt.Fprint(w, `{"models":[{"id":"gpt-4.1"}]}`)
+		case "/v0/management/openai-compatibility":
+			_, _ = fmt.Fprint(w, `{"openai-compatibility":[{"name":"my-openai","base-url":"https://api.openai.com","api-key":"sk-secret","priority":5}]}`)
+		case "/v0/management/claude-api-key":
+			_, _ = fmt.Fprint(w, `{"claude-api-key":[{"api-key":"sk-ant-secret","disabled":true}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	target, err := NewTarget(TargetConfig{TargetID: "t", BaseURL: server.URL, ManagementKey: "key"}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	channels, err := target.ListChannels(context.Background())
+	if err != nil {
+		t.Fatalf("ListChannels() error = %v", err)
+	}
+	if len(channels) != 2 {
+		t.Fatalf("got %d channels, want 2: %#v", len(channels), channels)
+	}
+
+	oai := channels[0]
+	if oai.Name != "my-openai" || oai.Provider != platform.ProviderOpenAI || oai.Priority != 5 || !oai.Enabled {
+		t.Fatalf("openai channel = %#v", oai)
+	}
+
+	claude := channels[1]
+	if claude.Provider != platform.ProviderAnthropic || claude.Enabled {
+		t.Fatalf("claude channel = %#v", claude)
 	}
 }
 

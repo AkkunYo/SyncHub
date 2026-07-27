@@ -36,6 +36,15 @@ type Target struct {
 	catalog *platform.ProviderCatalog
 }
 
+var knownStaticRoutes = []targetRoute{
+	route("openai-compatibility", "openai", "openai-compatibility"),
+	route("claude-api-key", "claude", "anthropic"),
+	route("gemini-api-key", "gemini", "aistudio"),
+	route("codex-api-key", "codex"),
+	route("xai-api-key", "xai"),
+	route("vertex-api-key", "vertex"),
+}
+
 type targetAuthFilesResponse struct {
 	Files []targetAuthEntry `json:"files"`
 }
@@ -104,6 +113,18 @@ func (t *Target) ListChannels(ctx context.Context) ([]platform.Channel, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	authIndexSet := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		idx := strings.TrimSpace(entry.AuthIndex)
+		if idx == "" {
+			idx = strings.TrimSpace(entry.AuthIndexDash)
+		}
+		if idx != "" {
+			authIndexSet[idx] = struct{}{}
+		}
+	}
+
 	channels := make([]platform.Channel, 0, len(entries))
 	for _, entry := range entries {
 		name := entry.Name
@@ -127,7 +148,78 @@ func (t *Target) ListChannels(ctx context.Context) ([]platform.Channel, error) {
 			Enabled:  entry.enabled(),
 		})
 	}
+
+	for _, r := range knownStaticRoutes {
+		extra := t.listStaticConfigChannels(ctx, r, authIndexSet)
+		channels = append(channels, extra...)
+	}
+
 	return channels, nil
+}
+
+func (t *Target) listStaticConfigChannels(ctx context.Context, r targetRoute, seen map[string]struct{}) []platform.Channel {
+	entries, err := t.readStaticConfig(ctx, r)
+	if err != nil {
+		return nil
+	}
+	defer clearConfigSecrets(entries)
+
+	var channels []platform.Channel
+	for _, entry := range entries {
+		authIndex := staticConfigStringField(entry, "auth-index", "auth_index")
+		if authIndex != "" {
+			if _, exists := seen[authIndex]; exists {
+				continue
+			}
+			seen[authIndex] = struct{}{}
+		}
+
+		name := staticConfigStringField(entry, "name", "display-name", "display_name")
+		if name == "" {
+			name = r.endpoint
+		}
+
+		var rawProvider string
+		for p := range r.rawProviders {
+			rawProvider = p
+			break
+		}
+		descriptor := t.catalog.FromCLIProxyAPI(rawProvider)
+
+		id := authIndex
+		if id == "" {
+			id = "static:" + r.endpoint + ":" + name
+		}
+
+		disabled, _ := entry["disabled"].(bool)
+		priority, _ := entry["priority"].(float64)
+
+		models, _ := t.listTargetModels(ctx, name)
+
+		channels = append(channels, platform.Channel{
+			ID:       id,
+			Name:     name,
+			Provider: descriptor.ID,
+			RawType:  rawProvider,
+			Models:   models,
+			Group:    "default",
+			Priority: int(priority),
+			Weight:   100,
+			Enabled:  !disabled,
+		})
+	}
+	return channels
+}
+
+func staticConfigStringField(entry map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := entry[key].(string); ok {
+			if trimmed := strings.TrimSpace(value); trimmed != "" {
+				return trimmed
+			}
+		}
+	}
+	return ""
 }
 
 func (t *Target) CreateChannel(ctx context.Context, input platform.CreateChannelInput) (platform.Channel, error) {
