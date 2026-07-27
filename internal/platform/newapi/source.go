@@ -200,16 +200,10 @@ func (s *Source) ensureMode(ctx context.Context) (discoveryMode, error) {
 func (s *Source) probe(ctx context.Context) (discoveryMode, int, error) {
 	var self userSelfResponse
 	if err := s.transport.get(ctx, "/api/user/self", "", &self); err != nil {
-		if s.config.DiscoveryMode == config.DiscoveryModeChannel {
-			return modeUnresolved, 0, fmt.Errorf("%w: cannot verify admin role", ErrInsufficientPrivilege)
-		}
-		return modeToken, 0, nil
+		return modeUnresolved, 0, err
 	}
 	if !self.Success {
-		if s.config.DiscoveryMode == config.DiscoveryModeChannel {
-			return modeUnresolved, 0, fmt.Errorf("%w: /api/user/self rejected", ErrInsufficientPrivilege)
-		}
-		return modeToken, 0, nil
+		return modeUnresolved, 0, errors.New("New API user probe was not successful")
 	}
 
 	role := self.Data.Role
@@ -234,10 +228,7 @@ func (s *Source) probe(ctx context.Context) (discoveryMode, int, error) {
 		return modeUnresolved, role, err
 	}
 	if !channelProbe.Success {
-		if s.config.DiscoveryMode == config.DiscoveryModeChannel {
-			return modeUnresolved, role, fmt.Errorf("%w: channel listing was not successful", ErrInsufficientPrivilege)
-		}
-		return modeToken, role, nil
+		return modeUnresolved, role, errors.New("New API channel probe was not successful")
 	}
 
 	return modeChannel, role, nil

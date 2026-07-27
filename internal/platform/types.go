@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 )
 
 var (
@@ -14,6 +15,20 @@ var (
 	ErrRateLimited         = errors.New("upstream rate limited")
 	ErrGroupRequired       = errors.New("upstream group is required")
 )
+
+// RateLimitError preserves the upstream's retry guidance while remaining
+// compatible with errors.Is(err, ErrRateLimited).
+type RateLimitError struct {
+	RetryAfter time.Duration
+}
+
+func (e *RateLimitError) Error() string {
+	return ErrRateLimited.Error()
+}
+
+func (e *RateLimitError) Unwrap() error {
+	return ErrRateLimited
+}
 
 type AssetKind string
 

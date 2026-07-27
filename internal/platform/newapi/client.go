@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/AkkunYo/SyncHub/internal/platform"
@@ -19,6 +20,10 @@ import (
 // being distinguishable from a transport failure: a common-user token hitting an
 // Admin endpoint must fall back to token mode, not report the upstream as down.
 var ErrInsufficientPrivilege = errors.New("New API credential lacks the required privilege")
+
+// ErrUnauthenticated is distinct from ErrInsufficientPrivilege because an
+// invalid credential must never trigger automatic fallback to token mode.
+var ErrUnauthenticated = errors.New("New API credential is invalid or expired")
 
 // transport centralizes New API management calls so channel discovery, token
 // discovery and group discovery share one timeout, header and error policy.
@@ -90,7 +95,7 @@ func (t transport) do(ctx context.Context, spec request, destination any) error 
 
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 32<<10))
-		return statusError(response.StatusCode)
+		return statusError(response.StatusCode, response.Header.Get("Retry-After"), time.Now())
 	}
 
 	encodedResponse, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
@@ -115,15 +120,30 @@ func (t transport) do(ctx context.Context, spec request, destination any) error 
 
 // statusError maps the states an operator must act on differently: rate
 // limiting is retryable, missing privilege is not.
-func statusError(status int) error {
+func statusError(status int, retryAfter string, now time.Time) error {
 	switch status {
 	case http.StatusTooManyRequests:
-		return fmt.Errorf("%w: New API rate limit reached", platform.ErrRateLimited)
-	case http.StatusUnauthorized, http.StatusForbidden:
+		return &platform.RateLimitError{RetryAfter: parseRetryAfter(retryAfter, now)}
+	case http.StatusUnauthorized:
+		return fmt.Errorf("%w: status %d", ErrUnauthenticated, status)
+	case http.StatusForbidden:
 		return fmt.Errorf("%w: status %d", ErrInsufficientPrivilege, status)
 	default:
 		return fmt.Errorf("New API request returned status %d", status)
 	}
+}
+
+func parseRetryAfter(value string, now time.Time) time.Duration {
+	value = strings.TrimSpace(value)
+	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil && seconds >= 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	if retryAt, err := http.ParseTime(value); err == nil {
+		if delay := retryAt.Sub(now); delay > 0 {
+			return delay
+		}
+	}
+	return 0
 }
 
 func wipeTargetBytes(value []byte) {
