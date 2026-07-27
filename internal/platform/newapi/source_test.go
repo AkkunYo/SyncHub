@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/AkkunYo/SyncHub/internal/platform"
 )
@@ -403,5 +404,132 @@ func TestProbeCachesResult(t *testing.T) {
 	}
 	if got := probeCount.Load(); got != 1 {
 		t.Fatalf("probe called %d times, want 1 (cached)", got)
+	}
+}
+
+func TestProbeAutoModeDoesNotFallbackOnSelfFailures(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		status     int
+		body       string
+		retryAfter string
+		want       error
+	}{
+		{name: "unauthenticated", status: http.StatusUnauthorized, want: ErrUnauthenticated},
+		{name: "rate limited", status: http.StatusTooManyRequests, retryAfter: "19", want: platform.ErrRateLimited},
+		{name: "server failure", status: http.StatusBadGateway},
+		{name: "invalid json", status: http.StatusOK, body: `{"success":`},
+		{name: "unsuccessful envelope", status: http.StatusOK, body: `{"success":false,"message":"rejected"}`},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			var channelRequests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api/user/self" {
+					channelRequests.Add(1)
+				}
+				if test.retryAfter != "" {
+					w.Header().Set("Retry-After", test.retryAfter)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(test.status)
+				if test.body != "" {
+					_, _ = fmt.Fprint(w, test.body)
+				}
+			}))
+			t.Cleanup(server.Close)
+
+			source, err := NewSource(Config{SourceID: "s", BaseURL: server.URL, AccessToken: "tok", DiscoveryMode: "auto"}, server.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = source.Capabilities(context.Background())
+			if err == nil {
+				t.Fatal("Capabilities() error = nil, want probe failure")
+			}
+			if test.want != nil && !errors.Is(err, test.want) {
+				t.Fatalf("Capabilities() error = %v, want errors.Is(%v)", err, test.want)
+			}
+			if got := channelRequests.Load(); got != 0 {
+				t.Fatalf("channel requests = %d, want 0", got)
+			}
+		})
+	}
+}
+
+func TestProbeAutoModeDoesNotFallbackOnSelfTimeout(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	t.Cleanup(server.Close)
+
+	source, err := NewSource(Config{
+		SourceID: "s", BaseURL: server.URL, AccessToken: "tok", DiscoveryMode: "auto", RequestTimeout: 20 * time.Millisecond,
+	}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = source.Capabilities(context.Background())
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Capabilities() error = %v, want deadline exceeded", err)
+	}
+}
+
+func TestProbeAutoModeDoesNotFallbackWhenAdminChannelProbeIsUncertain(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		status     int
+		body       string
+		retryAfter string
+		want       error
+	}{
+		{name: "unauthenticated", status: http.StatusUnauthorized, want: ErrUnauthenticated},
+		{name: "rate limited", status: http.StatusTooManyRequests, retryAfter: "23", want: platform.ErrRateLimited},
+		{name: "server failure", status: http.StatusServiceUnavailable},
+		{name: "invalid json", status: http.StatusOK, body: `{"success":`},
+		{name: "unsuccessful envelope", status: http.StatusOK, body: `{"success":false}`},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if r.URL.Path == "/api/user/self" {
+					_, _ = fmt.Fprint(w, `{"success":true,"data":{"role":10,"group":"default"}}`)
+					return
+				}
+				if test.retryAfter != "" {
+					w.Header().Set("Retry-After", test.retryAfter)
+				}
+				w.WriteHeader(test.status)
+				if test.body != "" {
+					_, _ = fmt.Fprint(w, test.body)
+				}
+			}))
+			t.Cleanup(server.Close)
+
+			source, err := NewSource(Config{SourceID: "s", BaseURL: server.URL, AccessToken: "tok", DiscoveryMode: "auto"}, server.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = source.Capabilities(context.Background())
+			if err == nil {
+				t.Fatal("Capabilities() error = nil, want channel probe failure")
+			}
+			if test.want != nil && !errors.Is(err, test.want) {
+				t.Fatalf("Capabilities() error = %v, want errors.Is(%v)", err, test.want)
+			}
+		})
 	}
 }
