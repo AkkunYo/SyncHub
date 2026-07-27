@@ -75,7 +75,7 @@ func TestAdapterResolverConstructsSupportedAdapters(t *testing.T) {
 		{
 			name: "new api",
 			config: config.UpstreamConfig{
-				ID: "new-source", Type: "newapi", BaseURL: "https://new.example.test", AccessToken: "test-console-token",
+				ID: "new-source", Type: "newapi", BaseURL: "https://new.example.test", AccessToken: "test-console-token", DiscoveryMode: "channel",
 			},
 			wantType: (*newapi.Source)(nil),
 		},
@@ -147,18 +147,20 @@ func TestAdapterResolverUsesInjectedClientConfiguredTimeoutAndAdminAuth(t *testi
 		if got := request.Header.Get("New-Api-User"); got != "" {
 			t.Errorf("New-Api-User must be absent, got %q", got)
 		}
+		body := `{"success":true,"data":{"items":[],"total":0,"page":1,"page_size":100}}`
+		if request.URL.Path == "/api/user/self" {
+			body = `{"success":true,"data":{"role":100,"group":"default"}}`
+		}
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     make(http.Header),
-			Body: io.NopCloser(strings.NewReader(
-				`{"success":true,"data":{"items":[],"total":0,"page":1,"page_size":100}}`,
-			)),
-			Request: request,
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Request:    request,
 		}, nil
 	})}
 	resolver := NewAdapterResolver(store, client)
 	adapter, err := resolver.ResolveUpstream(context.Background(), config.UpstreamConfig{
-		ID: "new-source", Type: "newapi", BaseURL: "https://new.example.test", AccessToken: "test-console-token",
+		ID: "new-source", Type: "newapi", BaseURL: "https://new.example.test", AccessToken: "test-console-token", DiscoveryMode: "channel",
 	})
 	if err != nil {
 		t.Fatalf("ResolveUpstream() error = %v", err)
@@ -166,8 +168,8 @@ func TestAdapterResolverUsesInjectedClientConfiguredTimeoutAndAdminAuth(t *testi
 	if _, err := adapter.ListAssets(context.Background(), platform.PageCursor{}); err != nil {
 		t.Fatalf("ListAssets() error = %v", err)
 	}
-	if calls.Load() != 1 {
-		t.Fatalf("transport calls = %d, want 1", calls.Load())
+	if calls.Load() != 3 {
+		t.Fatalf("transport calls = %d, want 3 (probe: user/self + channel; listing: channel)", calls.Load())
 	}
 
 	client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
@@ -405,6 +407,10 @@ func TestAdapterResolverPropagatesNewAPIUserIDAndIncludesItInSourceIdentity(t *t
 		headers = append(headers, r.Header.Get("New-Api-User"))
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/user/self" {
+			_, _ = io.WriteString(w, `{"success":true,"data":{"role":100,"group":"default"}}`)
+			return
+		}
 		_, _ = io.WriteString(w, `{"success":true,"data":{"items":[],"total":0,"page":1,"page_size":100}}`)
 	}))
 	t.Cleanup(server.Close)
@@ -421,7 +427,7 @@ func TestAdapterResolverPropagatesNewAPIUserIDAndIncludesItInSourceIdentity(t *t
 		t.Fatalf("target.ListChannels() error = %v", err)
 	}
 
-	upstreamConfig := config.UpstreamConfig{ID: "source-a", Type: "newapi", BaseURL: server.URL, AccessToken: "REPLACE_WITH_SOURCE_TOKEN"}
+	upstreamConfig := config.UpstreamConfig{ID: "source-a", Type: "newapi", BaseURL: server.URL, AccessToken: "REPLACE_WITH_SOURCE_TOKEN", DiscoveryMode: "channel"}
 	setResolverUserIDForTest(t, &upstreamConfig, 41)
 	first, err := resolver.ResolveUpstream(context.Background(), upstreamConfig)
 	if err != nil {
@@ -444,7 +450,7 @@ func TestAdapterResolverPropagatesNewAPIUserIDAndIncludesItInSourceIdentity(t *t
 	mu.Lock()
 	got := append([]string(nil), headers...)
 	mu.Unlock()
-	if !reflect.DeepEqual(got, []string{"31", "41", "42"}) {
+	if !reflect.DeepEqual(got, []string{"31", "41", "41", "41", "42", "42", "42"}) {
 		t.Fatalf("New-Api-User headers = %#v", got)
 	}
 }

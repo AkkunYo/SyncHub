@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/AkkunYo/SyncHub/internal/config"
 	"github.com/AkkunYo/SyncHub/internal/platform"
 )
 
@@ -23,15 +25,26 @@ type Config struct {
 	UserID         int
 	PageSize       int
 	RequestTimeout time.Duration
+	DiscoveryMode  string
 }
+
+type discoveryMode int
+
+const (
+	modeUnresolved discoveryMode = iota
+	modeChannel
+	modeToken
+)
 
 type Source struct {
 	config    Config
 	transport transport
 	catalog   *platform.ProviderCatalog
 
-	mu      sync.RWMutex
-	records map[string]assetRecord
+	mu           sync.RWMutex
+	records      map[string]assetRecord
+	resolvedMode discoveryMode
+	userRole     int
 }
 
 type assetRecord struct {
@@ -75,10 +88,19 @@ type channelKeyResponse struct {
 	} `json:"data"`
 }
 
+type userSelfResponse struct {
+	Success bool `json:"success"`
+	Data    struct {
+		Role  int    `json:"role"`
+		Group string `json:"group"`
+	} `json:"data"`
+}
+
 func NewSource(cfg Config, client *http.Client) (*Source, error) {
 	cfg.SourceID = strings.TrimSpace(cfg.SourceID)
 	cfg.BaseURL = strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
 	cfg.AccessToken = strings.TrimSpace(cfg.AccessToken)
+	cfg.DiscoveryMode = strings.ToLower(strings.TrimSpace(cfg.DiscoveryMode))
 	if cfg.SourceID == "" {
 		return nil, errors.New("source id is required")
 	}
@@ -104,6 +126,15 @@ func NewSource(cfg Config, client *http.Client) (*Source, error) {
 	if client == nil {
 		client = &http.Client{}
 	}
+
+	var initial discoveryMode
+	switch cfg.DiscoveryMode {
+	case config.DiscoveryModeToken:
+		initial = modeToken
+	default:
+		initial = modeUnresolved
+	}
+
 	return &Source{
 		config: cfg,
 		transport: transport{
@@ -113,16 +144,106 @@ func NewSource(cfg Config, client *http.Client) (*Source, error) {
 			requestTimeout: cfg.RequestTimeout,
 			client:         client,
 		},
-		catalog: platform.DefaultCatalog(),
-		records: make(map[string]assetRecord),
+		catalog:      platform.DefaultCatalog(),
+		records:      make(map[string]assetRecord),
+		resolvedMode: initial,
 	}, nil
 }
 
-func (s *Source) Capabilities(context.Context) (platform.SourceCapabilities, error) {
-	return platform.SourceCapabilities{AssetKinds: []platform.AssetKind{platform.AssetStaticAPIKey}, SecretResolution: true}, nil
+func (s *Source) Capabilities(ctx context.Context) (platform.SourceCapabilities, error) {
+	mode, err := s.ensureMode(ctx)
+	if err != nil {
+		return platform.SourceCapabilities{}, err
+	}
+	switch mode {
+	case modeToken:
+		return platform.SourceCapabilities{AssetKinds: []platform.AssetKind{platform.AssetProxyKey}, SecretResolution: true}, nil
+	default:
+		return platform.SourceCapabilities{AssetKinds: []platform.AssetKind{platform.AssetStaticAPIKey}, SecretResolution: true}, nil
+	}
 }
 
 func (s *Source) ListAssets(ctx context.Context, cursor platform.PageCursor) (platform.AssetPage, error) {
+	mode, err := s.ensureMode(ctx)
+	if err != nil {
+		return platform.AssetPage{}, err
+	}
+	if mode == modeToken {
+		return platform.AssetPage{}, errors.New("token mode listing not yet implemented")
+	}
+	return s.listChannelAssets(ctx, cursor)
+}
+
+func (s *Source) ensureMode(ctx context.Context) (discoveryMode, error) {
+	s.mu.RLock()
+	mode := s.resolvedMode
+	s.mu.RUnlock()
+	if mode != modeUnresolved {
+		return mode, nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.resolvedMode != modeUnresolved {
+		return s.resolvedMode, nil
+	}
+
+	resolved, role, err := s.probe(ctx)
+	if err != nil {
+		return modeUnresolved, err
+	}
+	s.resolvedMode = resolved
+	s.userRole = role
+	return resolved, nil
+}
+
+func (s *Source) probe(ctx context.Context) (discoveryMode, int, error) {
+	var self userSelfResponse
+	if err := s.transport.get(ctx, "/api/user/self", "", &self); err != nil {
+		if s.config.DiscoveryMode == config.DiscoveryModeChannel {
+			return modeUnresolved, 0, fmt.Errorf("%w: cannot verify admin role", ErrInsufficientPrivilege)
+		}
+		return modeToken, 0, nil
+	}
+	if !self.Success {
+		if s.config.DiscoveryMode == config.DiscoveryModeChannel {
+			return modeUnresolved, 0, fmt.Errorf("%w: /api/user/self rejected", ErrInsufficientPrivilege)
+		}
+		return modeToken, 0, nil
+	}
+
+	role := self.Data.Role
+	if role < 10 {
+		if s.config.DiscoveryMode == config.DiscoveryModeChannel {
+			return modeUnresolved, role, fmt.Errorf("%w: role %d is below admin threshold", ErrInsufficientPrivilege, role)
+		}
+		return modeToken, role, nil
+	}
+
+	query := url.Values{}
+	query.Set("p", "1")
+	query.Set("page_size", "1")
+	var channelProbe channelListResponse
+	if err := s.transport.get(ctx, "/api/channel/", query.Encode(), &channelProbe); err != nil {
+		if errors.Is(err, ErrInsufficientPrivilege) {
+			if s.config.DiscoveryMode == config.DiscoveryModeChannel {
+				return modeUnresolved, role, fmt.Errorf("%w: channel listing rejected despite role %d", ErrInsufficientPrivilege, role)
+			}
+			return modeToken, role, nil
+		}
+		return modeUnresolved, role, err
+	}
+	if !channelProbe.Success {
+		if s.config.DiscoveryMode == config.DiscoveryModeChannel {
+			return modeUnresolved, role, fmt.Errorf("%w: channel listing was not successful", ErrInsufficientPrivilege)
+		}
+		return modeToken, role, nil
+	}
+
+	return modeChannel, role, nil
+}
+
+func (s *Source) listChannelAssets(ctx context.Context, cursor platform.PageCursor) (platform.AssetPage, error) {
 	page := cursor.Page
 	if page < 1 {
 		page = 1

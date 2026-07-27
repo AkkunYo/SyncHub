@@ -21,6 +21,11 @@ func TestSourceListsChannelMetadataByPageWithoutReadingKeys(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && r.URL.Path == "/api/user/self" {
+			_, _ = fmt.Fprint(w, `{"success":true,"data":{"role":100,"group":"default"}}`)
+			return
+		}
 		if r.Method != http.MethodGet || r.URL.Path != "/api/channel/" {
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.String())
 			http.NotFound(w, r)
@@ -35,11 +40,10 @@ func TestSourceListsChannelMetadataByPageWithoutReadingKeys(t *testing.T) {
 		if got := r.Header.Get("New-Api-User"); got != "" {
 			t.Errorf("New-Api-User = %q, want omitted", got)
 		}
-		if got := r.URL.Query().Get("page_size"); got != "2" {
+		if got := r.URL.Query().Get("page_size"); got != "2" && got != "1" {
 			t.Errorf("page_size = %q", got)
 		}
 
-		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Query().Get("p") {
 		case "1":
 			_, _ = fmt.Fprint(w, `{"success":true,"data":{"items":[`+
@@ -58,10 +62,11 @@ func TestSourceListsChannelMetadataByPageWithoutReadingKeys(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	source, err := NewSource(Config{
-		SourceID:    "source-a",
-		BaseURL:     server.URL,
-		AccessToken: "dashboard-token",
-		PageSize:    2,
+		SourceID:      "source-a",
+		BaseURL:       server.URL,
+		AccessToken:   "dashboard-token",
+		PageSize:      2,
+		DiscoveryMode: "channel",
 	}, server.Client())
 	if err != nil {
 		t.Fatal(err)
@@ -105,8 +110,8 @@ func TestSourceListsChannelMetadataByPageWithoutReadingKeys(t *testing.T) {
 	if strings.Contains(strings.ToLower(string(encoded)), "dashboard-token") || strings.Contains(strings.ToLower(string(encoded)), `"key"`) {
 		t.Fatalf("metadata contains secret material: %s", encoded)
 	}
-	if got := requests.Load(); got != 2 {
-		t.Fatalf("request count = %d, want 2 metadata requests", got)
+	if got := requests.Load(); got != 4 {
+		t.Fatalf("request count = %d, want 4 (probe: user/self + channel/; listing: 2 pages)", got)
 	}
 }
 
@@ -122,6 +127,8 @@ func TestSourceSendsConfiguredUserIdentityForPaginationAndKeyRead(t *testing.T) 
 		}
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/user/self":
+			_, _ = fmt.Fprint(w, `{"success":true,"data":{"role":100,"group":"default"}}`)
 		case r.Method == http.MethodGet && r.URL.Query().Get("p") == "1":
 			_, _ = fmt.Fprint(w, `{"success":true,"data":{"items":[{"id":7,"type":1,"name":"one","status":1,"channel_info":{"is_multi_key":false}}],"total":2,"page":1,"page_size":1}}`)
 		case r.Method == http.MethodGet && r.URL.Query().Get("p") == "2":
@@ -136,7 +143,7 @@ func TestSourceSendsConfiguredUserIdentityForPaginationAndKeyRead(t *testing.T) 
 		}
 	}))
 	t.Cleanup(server.Close)
-	cfg := Config{SourceID: "source-a", BaseURL: server.URL, AccessToken: "REPLACE_WITH_SOURCE_TOKEN", PageSize: 1}
+	cfg := Config{SourceID: "source-a", BaseURL: server.URL, AccessToken: "REPLACE_WITH_SOURCE_TOKEN", PageSize: 1, DiscoveryMode: "channel"}
 	setNewAPIUserIDForTest(t, &cfg, 47)
 	source, err := NewSource(cfg, server.Client())
 	if err != nil {
@@ -187,7 +194,7 @@ func TestSourceRequiresSecurityProofAndResolvesSelectedMultiKey(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	source, err := NewSource(Config{SourceID: "source-a", BaseURL: server.URL, AccessToken: "root-session"}, server.Client())
+	source, err := NewSource(Config{SourceID: "source-a", BaseURL: server.URL, AccessToken: "root-session", DiscoveryMode: "channel"}, server.Client())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +230,7 @@ func TestSourceDoesNotExposeSecretsInUpstreamErrors(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	source, err := NewSource(Config{SourceID: "source-a", BaseURL: server.URL, AccessToken: "root-sensitive"}, server.Client())
+	source, err := NewSource(Config{SourceID: "source-a", BaseURL: server.URL, AccessToken: "root-sensitive", DiscoveryMode: "channel"}, server.Client())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,5 +240,168 @@ func TestSourceDoesNotExposeSecretsInUpstreamErrors(t *testing.T) {
 	}
 	if message := err.Error(); strings.Contains(message, "proof-sensitive") || strings.Contains(message, "root-sensitive") {
 		t.Fatalf("error leaked secret: %v", err)
+	}
+}
+
+func TestProbeAutoModeAdminResolvesToChannel(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/user/self":
+			_, _ = fmt.Fprint(w, `{"success":true,"data":{"role":10,"group":"default"}}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/channel/":
+			_, _ = fmt.Fprint(w, `{"success":true,"data":{"items":[],"total":0,"page":1,"page_size":1}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	source, err := NewSource(Config{SourceID: "s", BaseURL: server.URL, AccessToken: "tok", DiscoveryMode: "auto"}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	caps, err := source.Capabilities(context.Background())
+	if err != nil {
+		t.Fatalf("Capabilities() error = %v", err)
+	}
+	if len(caps.AssetKinds) != 1 || caps.AssetKinds[0] != platform.AssetStaticAPIKey {
+		t.Fatalf("expected channel mode AssetStaticAPIKey, got %v", caps.AssetKinds)
+	}
+}
+
+func TestProbeAutoModeCommonUserResolvesToToken(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && r.URL.Path == "/api/user/self" {
+			_, _ = fmt.Fprint(w, `{"success":true,"data":{"role":1,"group":"default"}}`)
+			return
+		}
+		t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(server.Close)
+
+	source, err := NewSource(Config{SourceID: "s", BaseURL: server.URL, AccessToken: "tok", DiscoveryMode: "auto"}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	caps, err := source.Capabilities(context.Background())
+	if err != nil {
+		t.Fatalf("Capabilities() error = %v", err)
+	}
+	if len(caps.AssetKinds) != 1 || caps.AssetKinds[0] != platform.AssetProxyKey {
+		t.Fatalf("expected token mode AssetProxyKey, got %v", caps.AssetKinds)
+	}
+}
+
+func TestProbeAutoModeAdminChannelForbiddenResolvesToToken(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/user/self":
+			_, _ = fmt.Fprint(w, `{"success":true,"data":{"role":10,"group":"default"}}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/channel/":
+			http.Error(w, `{"success":false}`, http.StatusForbidden)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	source, err := NewSource(Config{SourceID: "s", BaseURL: server.URL, AccessToken: "tok", DiscoveryMode: "auto"}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	caps, err := source.Capabilities(context.Background())
+	if err != nil {
+		t.Fatalf("Capabilities() error = %v", err)
+	}
+	if len(caps.AssetKinds) != 1 || caps.AssetKinds[0] != platform.AssetProxyKey {
+		t.Fatalf("expected token mode, got %v", caps.AssetKinds)
+	}
+}
+
+func TestProbeChannelModeCommonUserReturnsError(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && r.URL.Path == "/api/user/self" {
+			_, _ = fmt.Fprint(w, `{"success":true,"data":{"role":1,"group":"default"}}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(server.Close)
+
+	source, err := NewSource(Config{SourceID: "s", BaseURL: server.URL, AccessToken: "tok", DiscoveryMode: "channel"}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = source.Capabilities(context.Background())
+	if err == nil {
+		t.Fatal("expected error for channel mode with common user")
+	}
+	if !errors.Is(err, ErrInsufficientPrivilege) {
+		t.Fatalf("error = %v, want ErrInsufficientPrivilege", err)
+	}
+}
+
+func TestProbeTokenModeSkipsProbe(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected request in token mode: %s %s", r.Method, r.URL.Path)
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(server.Close)
+
+	source, err := NewSource(Config{SourceID: "s", BaseURL: server.URL, AccessToken: "tok", DiscoveryMode: "token"}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	caps, err := source.Capabilities(context.Background())
+	if err != nil {
+		t.Fatalf("Capabilities() error = %v", err)
+	}
+	if len(caps.AssetKinds) != 1 || caps.AssetKinds[0] != platform.AssetProxyKey {
+		t.Fatalf("expected token mode AssetProxyKey, got %v", caps.AssetKinds)
+	}
+}
+
+func TestProbeCachesResult(t *testing.T) {
+	t.Parallel()
+
+	var probeCount atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && r.URL.Path == "/api/user/self" {
+			probeCount.Add(1)
+			_, _ = fmt.Fprint(w, `{"success":true,"data":{"role":1,"group":"default"}}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(server.Close)
+
+	source, err := NewSource(Config{SourceID: "s", BaseURL: server.URL, AccessToken: "tok", DiscoveryMode: "auto"}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.Capabilities(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.Capabilities(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := probeCount.Load(); got != 1 {
+		t.Fatalf("probe called %d times, want 1 (cached)", got)
 	}
 }

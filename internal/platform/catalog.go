@@ -214,6 +214,10 @@ func ChannelAssetID(sourceID, channelID string, keyIndex *int) string {
 	return id
 }
 
+func TokenAssetID(sourceID string, tokenID int) string {
+	return strings.TrimSpace(sourceID) + ":token:" + strconv.Itoa(tokenID)
+}
+
 func CLIProxyAssetID(sourceID, authID string) string {
 	return strings.TrimSpace(sourceID) + ":cpa:" + strings.TrimSpace(authID)
 }

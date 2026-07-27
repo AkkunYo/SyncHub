@@ -41,6 +41,7 @@ type upstreamIdentity struct {
 	credentialDigest [sha256.Size]byte
 	proxyKeyDigest   [sha256.Size]byte
 	managementHeader bool
+	discoveryMode    string
 }
 
 func NewAdapterResolver(store api.ConfigStore, client *http.Client) *AdapterResolver {
@@ -122,6 +123,7 @@ func (r *AdapterResolver) ResolveUpstream(ctx context.Context, cfg config.Upstre
 			AccessToken:    firstCredential(cfg.AccessToken, cfg.APIKey),
 			UserID:         cfg.UserID,
 			RequestTimeout: timeout,
+			DiscoveryMode:  cfg.DiscoveryMode,
 		}, r.client)
 		if buildErr != nil {
 			return nil, errors.New("New API upstream configuration is invalid")
@@ -178,6 +180,7 @@ func newUpstreamIdentity(cfg config.UpstreamConfig, timeout time.Duration) upstr
 		credentialDigest: sha256.Sum256([]byte(credential)),
 		proxyKeyDigest:   sha256.Sum256([]byte(strings.TrimSpace(cfg.ProxyAPIKey))),
 		managementHeader: useManagementHeader,
+		discoveryMode:    cfg.DiscoveryMode,
 	}
 }
 

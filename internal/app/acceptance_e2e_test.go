@@ -279,7 +279,9 @@ func newAcceptanceUpstream(t *testing.T) *httptest.Server {
 			return
 		}
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/channel/" && r.URL.Query().Get("p") == "1" && r.URL.Query().Get("page_size") == "100":
+		case r.Method == http.MethodGet && r.URL.Path == "/api/user/self":
+			writeAcceptanceJSON(w, map[string]any{"success": true, "data": map[string]any{"role": 100, "group": "default"}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/channel/" && r.URL.Query().Get("p") == "1":
 			writeAcceptanceJSON(w, map[string]any{
 				"success": true,
 				"data": map[string]any{
@@ -415,7 +417,7 @@ func TestSystemAcceptanceSyncReconcileAndChannelLifecycle(t *testing.T) {
 		{ID: "target-a", Name: "Target A", Type: "newapi", BaseURL: targetA.server.URL, AccessToken: acceptanceTargetAToken},
 		{ID: "target-b", Name: "Target B", Type: "newapi", BaseURL: targetB.server.URL, AccessToken: acceptanceTargetBToken},
 	}, []config.UpstreamConfig{{
-		ID: "source-a", Name: "Source A", Type: "newapi", BaseURL: upstream.URL, AccessToken: acceptanceUpstreamToken,
+		ID: "source-a", Name: "Source A", Type: "newapi", BaseURL: upstream.URL, AccessToken: acceptanceUpstreamToken, DiscoveryMode: "channel",
 	}})
 	router := newAcceptanceRouter(t, configPath)
 
@@ -523,7 +525,7 @@ func TestSystemAcceptanceReconcilePaginationFailurePreservesMapping(t *testing.T
 		ID: "target-a", Name: "Target A", Type: "newapi", BaseURL: target.server.URL, AccessToken: acceptanceTargetAToken,
 	}}, []config.UpstreamConfig{{
 		ID: "source-a", Name: "Source A", Type: "newapi", BaseURL: target.server.URL,
-		AccessToken: acceptanceUpstreamToken, SyncMappings: []config.SyncMapping{wantMapping},
+		AccessToken: acceptanceUpstreamToken, DiscoveryMode: "channel", SyncMappings: []config.SyncMapping{wantMapping},
 	}})
 	router := newAcceptanceRouter(t, configPath)
 
