@@ -205,6 +205,66 @@ func TestSyncUnitsRejectsDuplicateUnitIdentityBeforeExternalCalls(t *testing.T) 
 	}
 }
 
+func TestSyncUnitsMarksCreatedUnitsForReconcileWhenPersistenceFails(t *testing.T) {
+	t.Parallel()
+
+	secretBytes := []byte("persist-failure-secret")
+	source := &fakeBatchSource{max: 100, resolve: func(ids []string) (map[string]platform.ResolvedSecret, error) {
+		return map[string]platform.ResolvedSecret{
+			ids[0]: {Kind: platform.AssetProxyKey, Bytes: secretBytes},
+		}, nil
+	}}
+	store := &fakeMappingStore{err: errors.New("disk full with sensitive detail")}
+	target := &fakeTarget{id: "target", create: func(context.Context, platform.CreateChannelInput) (platform.Channel, error) {
+		return platform.Channel{ID: "created-42", Models: []string{"gpt-4o"}}, nil
+	}}
+	group := &platform.UpstreamGroup{Name: "vip", Models: []string{"gpt-4o"}, ModelsVerified: true}
+	result, err := NewService(store, Options{Concurrency: 1}).SyncUnits(context.Background(), MultiRequest{
+		Source: source,
+		Units:  []UnitRequest{tokenUnit("u-1", "asset-1", "target", target, group, nil)},
+	})
+	if !errors.Is(err, ErrMappingPersist) {
+		t.Fatalf("SyncUnits() error = %v, want ErrMappingPersist", err)
+	}
+	unit := result.Units[0]
+	if unit.Status != TargetNeedsReconcile || unit.Code != "mapping_persist_failed" || unit.ChannelID != "created-42" || !unit.Retryable {
+		t.Fatalf("unit = %#v", unit)
+	}
+	assertWiped(t, secretBytes)
+}
+
+func TestSyncUnitsDeduplicatesSingleAssetForNonBatchSource(t *testing.T) {
+	t.Parallel()
+
+	secretBytes := []byte("static-source-secret")
+	source := &fakeSource{secret: platform.ResolvedSecret{Kind: platform.AssetStaticAPIKey, Bytes: secretBytes}}
+	store := &fakeMappingStore{}
+	target := &fakeTarget{id: "target", create: func(_ context.Context, input platform.CreateChannelInput) (platform.Channel, error) {
+		return platform.Channel{ID: input.AssetID + "-" + input.Group, Models: input.Models, Group: input.Group}, nil
+	}}
+	asset := platform.UpstreamAsset{
+		ID: "static-asset", SourceID: "source-a", SourceType: "newapi", Provider: platform.ProviderOpenAI,
+		Kind: platform.AssetStaticAPIKey, Name: "static", Enabled: true, SecretReadable: true,
+	}
+	units := []UnitRequest{
+		{UnitID: "u-1", Asset: asset, Target: TargetRequest{ID: "target-a", Adapter: target, Capabilities: staticKeyCapabilities()}, Settings: platform.ChannelSettings{Models: []string{"gpt-4o"}, Group: "a"}},
+		{UnitID: "u-2", Asset: asset, Target: TargetRequest{ID: "target-b", Adapter: target, Capabilities: staticKeyCapabilities()}, Settings: platform.ChannelSettings{Models: []string{"gpt-4o"}, Group: "b"}},
+	}
+	result, err := NewService(store, Options{Concurrency: 2}).SyncUnits(context.Background(), MultiRequest{Source: source, Units: units})
+	if err != nil {
+		t.Fatalf("SyncUnits() error = %v", err)
+	}
+	if source.resolveCalls.Load() != 1 {
+		t.Fatalf("ResolveSecret calls = %d, want 1", source.resolveCalls.Load())
+	}
+	for _, unit := range result.Units {
+		if unit.Status != TargetSynced {
+			t.Fatalf("unit = %#v", unit)
+		}
+	}
+	assertWiped(t, secretBytes)
+}
+
 type fakeBatchSource struct {
 	fakeSource
 	max     int
