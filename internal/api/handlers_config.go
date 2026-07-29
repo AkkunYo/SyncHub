@@ -379,6 +379,11 @@ func validateUpstreamCreate(request upstreamCreateRequest) (config.UpstreamConfi
 			return config.UpstreamConfig{}, errInvalidInput
 		}
 		upstream.APIKey = request.APIKey
+	case "generic":
+		if request.UserID.set || request.AccessToken != "" || request.ManagementKey != "" || request.ProxyAPIKey.set || request.DiscoveryMode != "" || request.ManageTokens || validateCredential(request.APIKey) != nil {
+			return config.UpstreamConfig{}, errInvalidInput
+		}
+		upstream.APIKey = request.APIKey
 	default:
 		return config.UpstreamConfig{}, errInvalidInput
 	}
@@ -502,6 +507,13 @@ func applyUpstreamCredentials(upstream *config.UpstreamConfig, accessToken, mana
 			upstream.ProxyAPIKey = proxyAPIKey.value
 		}
 	case "sub2api":
+		if accessToken.set || managementKey.set || proxyAPIKey.set {
+			return errInvalidInput
+		}
+		if apiKey.set {
+			upstream.APIKey = apiKey.value
+		}
+	case "generic":
 		if accessToken.set || managementKey.set || proxyAPIKey.set {
 			return errInvalidInput
 		}

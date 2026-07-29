@@ -14,6 +14,7 @@ import (
 	"github.com/AkkunYo/SyncHub/internal/config"
 	"github.com/AkkunYo/SyncHub/internal/platform"
 	"github.com/AkkunYo/SyncHub/internal/platform/cliproxyapi"
+	"github.com/AkkunYo/SyncHub/internal/platform/generic"
 	"github.com/AkkunYo/SyncHub/internal/platform/newapi"
 	"github.com/AkkunYo/SyncHub/internal/platform/sub2api"
 )
@@ -148,6 +149,15 @@ func (r *AdapterResolver) ResolveUpstream(ctx context.Context, cfg config.Upstre
 			return nil, errors.New("Sub2Api upstream configuration is invalid")
 		}
 		source = built
+	case "generic":
+		built, buildErr := generic.NewSource(generic.Config{
+			SourceID: cfg.ID, Name: cfg.Name, BaseURL: cfg.BaseURL, APIKey: strings.TrimSpace(cfg.APIKey),
+			RequestTimeout: timeout,
+		}, r.client)
+		if buildErr != nil {
+			return nil, errors.New("generic upstream configuration is invalid")
+		}
+		source = built
 	default:
 		return nil, ErrUnsupportedPlatform
 	}
@@ -197,6 +207,8 @@ func newUpstreamIdentity(cfg config.UpstreamConfig, timeout time.Duration) upstr
 	case "cliproxyapi":
 		credential, useManagementHeader = managementCredential(cfg.ManagementKey, cfg.APIKey)
 	case "sub2api":
+		credential = strings.TrimSpace(cfg.APIKey)
+	case "generic":
 		credential = strings.TrimSpace(cfg.APIKey)
 	}
 	return upstreamIdentity{

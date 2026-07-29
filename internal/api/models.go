@@ -51,7 +51,7 @@ type publicUpstream struct {
 	EffectiveDiscoveryMode string                 `json:"effective_discovery_mode,omitempty"`
 	ModeStatus             string                 `json:"mode_status,omitempty"`
 	ModeErrorCode          string                 `json:"mode_error_code,omitempty"`
-	ManageTokens           bool                   `json:"manage_tokens"`
+	ManageTokens           *bool                  `json:"manage_tokens,omitempty"`
 	SyncMappings           []platform.SyncMapping `json:"sync_mappings"`
 }
 
@@ -329,10 +329,15 @@ func redactUpstream(upstream config.UpstreamConfig) publicUpstream {
 	if mappings == nil {
 		mappings = []platform.SyncMapping{}
 	}
-	return publicUpstream{
+	result := publicUpstream{
 		ID: upstream.ID, Name: upstream.Name, Type: upstream.Type, BaseURL: upstream.BaseURL, UserID: upstream.UserID,
-		DiscoveryMode: upstream.DiscoveryMode, ManageTokens: upstream.ManageTokens, SyncMappings: mappings,
+		DiscoveryMode: upstream.DiscoveryMode, SyncMappings: mappings,
 	}
+	if upstream.Type == "newapi" {
+		manageTokens := upstream.ManageTokens
+		result.ManageTokens = &manageTokens
+	}
+	return result
 }
 
 func toManagedChannel(channel platform.Channel, mapping *platform.SyncMapping) managedChannel {

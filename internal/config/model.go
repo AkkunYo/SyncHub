@@ -200,7 +200,7 @@ func Validate(cfg *Config) error {
 			return fmt.Errorf("upstream[%d].name is required", i)
 		}
 		switch upstream.Type {
-		case "newapi", "cliproxyapi", "sub2api":
+		case "newapi", "cliproxyapi", "sub2api", "generic":
 		default:
 			return fmt.Errorf("upstream[%d].type %q is unsupported", i, upstream.Type)
 		}
@@ -209,6 +209,12 @@ func Validate(cfg *Config) error {
 		}
 		if upstream.Type != "cliproxyapi" && strings.TrimSpace(upstream.ProxyAPIKey) != "" {
 			return fmt.Errorf("upstream[%d].proxy_api_key is only supported for cliproxyapi", i)
+		}
+		if upstream.Type == "generic" && strings.TrimSpace(upstream.AccessToken) != "" {
+			return fmt.Errorf("upstream[%d].access_token is not supported for generic", i)
+		}
+		if upstream.Type == "generic" && strings.TrimSpace(upstream.ManagementKey) != "" {
+			return fmt.Errorf("upstream[%d].management_key is not supported for generic", i)
 		}
 		upstream.DiscoveryMode = strings.ToLower(strings.TrimSpace(upstream.DiscoveryMode))
 		if upstream.Type == "newapi" {
@@ -259,6 +265,10 @@ func Validate(cfg *Config) error {
 				return fmt.Errorf("upstream[%d].management_key is required", i)
 			}
 		case "sub2api":
+			if strings.TrimSpace(upstream.APIKey) == "" {
+				return fmt.Errorf("upstream[%d].api_key is required", i)
+			}
+		case "generic":
 			if strings.TrimSpace(upstream.APIKey) == "" {
 				return fmt.Errorf("upstream[%d].api_key is required", i)
 			}
