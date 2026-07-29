@@ -395,6 +395,7 @@ func (e *testEnvironment) dependencies() Dependencies {
 		Mappings:           e.mappings,
 		Reconcile:          e.reconciler,
 		Version:            "v-test",
+		BuildDate:          "2026-07-29T16:00:00+08:00",
 		RequestIDGenerator: func() string { return testRequestID },
 	}
 }
@@ -477,7 +478,7 @@ func TestHealthEnvelopeAndRequestID(t *testing.T) {
 		t.Fatalf("envelope = %#v", envelope)
 	}
 	data := dataObject(t, envelope)
-	if data["status"] != "ok" || data["version"] != "v-test" {
+	if data["status"] != "ok" || data["version"] != "v-test" || data["build_date"] != "2026-07-29T16:00:00+08:00" {
 		t.Fatalf("health data = %#v", data)
 	}
 

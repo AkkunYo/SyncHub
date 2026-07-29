@@ -156,6 +156,22 @@ describe('SyncHub console', () => {
     expect(screen.getAllByText('未同步')).toHaveLength(2)
   })
 
+  it('shows the running binary version and build time', async () => {
+    installFetch((url) => {
+      if (url.pathname === '/api/v1/health') {
+        return envelope({ status: 'ok', version: 'v1.3.0', build_date: '2026-07-29T16:00:00+08:00' })
+      }
+      if (url.pathname === '/api/v1/config') return envelope(config)
+      if (url.pathname === '/api/v1/matrix') return envelope(matrix())
+      throw new Error(`Unexpected request: ${url.pathname}`)
+    })
+
+    renderApp()
+
+    expect(await screen.findByText('版本 v1.3.0')).toBeInTheDocument()
+    expect(screen.getByText('编译 2026-07-29 16:00:00')).toBeInTheDocument()
+  })
+
   it('provides safe error, retry, and empty states', async () => {
     let configAttempts = 0
     installFetch((url) => {

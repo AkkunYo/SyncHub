@@ -21,6 +21,7 @@ func TestNewAssemblesConsumableDependenciesAndCloseIsIdempotent(t *testing.T) {
 	application, err := New(Options{
 		ConfigPath:         path,
 		Version:            "test-version",
+		BuildDate:          "2026-07-29T16:00:00+08:00",
 		HTTPClient:         &http.Client{},
 		Runtime:            runtimeState,
 		RequestIDGenerator: func() string { return "test-request-id" },
@@ -36,7 +37,7 @@ func TestNewAssemblesConsumableDependenciesAndCloseIsIdempotent(t *testing.T) {
 		dependencies.Sync == nil || dependencies.Mappings == nil || dependencies.Reconcile == nil {
 		t.Fatalf("Dependencies() incomplete: %#v", dependencies)
 	}
-	if dependencies.Version != "test-version" || dependencies.RequestIDGenerator == nil {
+	if dependencies.Version != "test-version" || dependencies.BuildDate != "2026-07-29T16:00:00+08:00" || dependencies.RequestIDGenerator == nil {
 		t.Fatalf("Dependencies() metadata = %#v", dependencies)
 	}
 	if _, err := api.NewRouterWithRuntime(dependencies, application.Runtime()); err != nil {
