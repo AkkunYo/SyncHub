@@ -16,7 +16,6 @@ import (
 	"github.com/AkkunYo/SyncHub/internal/platform/cliproxyapi"
 	"github.com/AkkunYo/SyncHub/internal/platform/generic"
 	"github.com/AkkunYo/SyncHub/internal/platform/newapi"
-	"github.com/AkkunYo/SyncHub/internal/platform/sub2api"
 )
 
 // AdapterResolver constructs adapters using the latest configured request
@@ -119,34 +118,19 @@ func (r *AdapterResolver) ResolveUpstream(ctx context.Context, cfg config.Upstre
 	var source platform.UpstreamAdapter
 	switch identity.sourceType {
 	case "newapi":
+		mode := strings.ToLower(strings.TrimSpace(cfg.DiscoveryMode))
+		if strings.TrimSpace(cfg.AccessToken) == "" || strings.TrimSpace(cfg.APIKey) != "" || (mode != "" && mode != config.DiscoveryModeToken) {
+			return nil, ErrUnsupportedPlatform
+		}
 		built, buildErr := newapi.NewSource(newapi.Config{
 			SourceID: cfg.ID, BaseURL: cfg.BaseURL,
-			AccessToken:    firstCredential(cfg.AccessToken, cfg.APIKey),
+			AccessToken:    strings.TrimSpace(cfg.AccessToken),
 			UserID:         cfg.UserID,
 			RequestTimeout: timeout,
 			DiscoveryMode:  cfg.DiscoveryMode,
 		}, r.client)
 		if buildErr != nil {
 			return nil, errors.New("New API upstream configuration is invalid")
-		}
-		source = built
-	case "cliproxyapi":
-		managementKey, useHeader := managementCredential(cfg.ManagementKey, cfg.APIKey)
-		built, buildErr := cliproxyapi.NewSource(cliproxyapi.Config{
-			SourceID: cfg.ID, BaseURL: cfg.BaseURL, ManagementKey: managementKey, ProxyAPIKey: cfg.ProxyAPIKey,
-			UseManagementKeyHeader: useHeader, RequestTimeout: timeout,
-		}, r.client)
-		if buildErr != nil {
-			return nil, errors.New("CLIProxyAPI upstream configuration is invalid")
-		}
-		source = built
-	case "sub2api":
-		built, buildErr := sub2api.NewSource(sub2api.Config{
-			SourceID: cfg.ID, BaseURL: cfg.BaseURL, APIKey: strings.TrimSpace(cfg.APIKey),
-			RequestTimeout: timeout,
-		}, r.client)
-		if buildErr != nil {
-			return nil, errors.New("Sub2Api upstream configuration is invalid")
 		}
 		source = built
 	case "generic":
@@ -202,12 +186,8 @@ func newUpstreamIdentity(cfg config.UpstreamConfig, timeout time.Duration) upstr
 	useManagementHeader := false
 	switch sourceType {
 	case "newapi":
-		credential = firstCredential(cfg.AccessToken, cfg.APIKey)
+		credential = strings.TrimSpace(cfg.AccessToken)
 		userID = cfg.UserID
-	case "cliproxyapi":
-		credential, useManagementHeader = managementCredential(cfg.ManagementKey, cfg.APIKey)
-	case "sub2api":
-		credential = strings.TrimSpace(cfg.APIKey)
 	case "generic":
 		credential = strings.TrimSpace(cfg.APIKey)
 	}

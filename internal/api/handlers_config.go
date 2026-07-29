@@ -349,13 +349,11 @@ func validateUpstreamCreate(request upstreamCreateRequest) (config.UpstreamConfi
 	upstream := config.UpstreamConfig{ID: request.ID, Name: name, Type: typeName, BaseURL: baseURL, SyncMappings: []config.SyncMapping{}}
 	switch typeName {
 	case "newapi":
-		if request.ManagementKey != "" || request.ProxyAPIKey.set || (request.AccessToken == "" && request.APIKey == "") ||
-			(request.AccessToken != "" && validateCredential(request.AccessToken) != nil) ||
-			(request.APIKey != "" && validateCredential(request.APIKey) != nil) {
+		if request.ManagementKey != "" || request.APIKey != "" || request.ProxyAPIKey.set ||
+			validateCredential(request.AccessToken) != nil {
 			return config.UpstreamConfig{}, errInvalidInput
 		}
 		upstream.AccessToken = request.AccessToken
-		upstream.APIKey = request.APIKey
 		mode, err := normalizeDiscoveryMode(request.DiscoveryMode)
 		if err != nil {
 			return config.UpstreamConfig{}, err
@@ -365,20 +363,6 @@ func validateUpstreamCreate(request upstreamCreateRequest) (config.UpstreamConfi
 		if request.UserID.set {
 			upstream.UserID = request.UserID.value
 		}
-	case "cliproxyapi":
-		if request.UserID.set || request.AccessToken != "" || request.DiscoveryMode != "" || request.ManageTokens || (request.ManagementKey == "" && request.APIKey == "") ||
-			(request.ManagementKey != "" && validateCredential(request.ManagementKey) != nil) ||
-			(request.APIKey != "" && validateCredential(request.APIKey) != nil) || validateOptionalProxyCredential(request.ProxyAPIKey) != nil {
-			return config.UpstreamConfig{}, errInvalidInput
-		}
-		upstream.ManagementKey = request.ManagementKey
-		upstream.APIKey = request.APIKey
-		upstream.ProxyAPIKey = request.ProxyAPIKey.value
-	case "sub2api":
-		if request.UserID.set || request.AccessToken != "" || request.ManagementKey != "" || request.ProxyAPIKey.set || request.DiscoveryMode != "" || request.ManageTokens || validateCredential(request.APIKey) != nil {
-			return config.UpstreamConfig{}, errInvalidInput
-		}
-		upstream.APIKey = request.APIKey
 	case "generic":
 		if request.UserID.set || request.AccessToken != "" || request.ManagementKey != "" || request.ProxyAPIKey.set || request.DiscoveryMode != "" || request.ManageTokens || validateCredential(request.APIKey) != nil {
 			return config.UpstreamConfig{}, errInvalidInput
@@ -396,7 +380,7 @@ func normalizeDiscoveryMode(value string) (string, error) {
 		return config.DiscoveryModeToken, nil
 	}
 	switch value {
-	case config.DiscoveryModeAuto, config.DiscoveryModeChannel, config.DiscoveryModeToken:
+	case config.DiscoveryModeToken:
 		return value, nil
 	default:
 		return "", errInvalidInput
@@ -484,34 +468,11 @@ func applyTargetUserID(target *config.TargetConfig, userID optionalInt) error {
 func applyUpstreamCredentials(upstream *config.UpstreamConfig, accessToken, managementKey, apiKey, proxyAPIKey optionalString) error {
 	switch upstream.Type {
 	case "newapi":
-		if managementKey.set || proxyAPIKey.set {
+		if managementKey.set || apiKey.set || proxyAPIKey.set {
 			return errInvalidInput
 		}
 		if accessToken.set {
 			upstream.AccessToken = accessToken.value
-		}
-		if apiKey.set {
-			upstream.APIKey = apiKey.value
-		}
-	case "cliproxyapi":
-		if accessToken.set {
-			return errInvalidInput
-		}
-		if managementKey.set {
-			upstream.ManagementKey = managementKey.value
-		}
-		if apiKey.set {
-			upstream.APIKey = apiKey.value
-		}
-		if proxyAPIKey.set {
-			upstream.ProxyAPIKey = proxyAPIKey.value
-		}
-	case "sub2api":
-		if accessToken.set || managementKey.set || proxyAPIKey.set {
-			return errInvalidInput
-		}
-		if apiKey.set {
-			upstream.APIKey = apiKey.value
 		}
 	case "generic":
 		if accessToken.set || managementKey.set || proxyAPIKey.set {

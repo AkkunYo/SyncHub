@@ -200,7 +200,7 @@ func Validate(cfg *Config) error {
 			return fmt.Errorf("upstream[%d].name is required", i)
 		}
 		switch upstream.Type {
-		case "newapi", "cliproxyapi", "sub2api", "generic":
+		case "newapi", "generic":
 		default:
 			return fmt.Errorf("upstream[%d].type %q is unsupported", i, upstream.Type)
 		}
@@ -222,7 +222,7 @@ func Validate(cfg *Config) error {
 				upstream.DiscoveryMode = DiscoveryModeToken
 			}
 			switch upstream.DiscoveryMode {
-			case DiscoveryModeAuto, DiscoveryModeChannel, DiscoveryModeToken:
+			case DiscoveryModeToken:
 			default:
 				return fmt.Errorf("upstream[%d].discovery_mode %q is unsupported", i, upstream.DiscoveryMode)
 			}
@@ -257,16 +257,11 @@ func Validate(cfg *Config) error {
 		upstream.BaseURL = baseURL
 		switch upstream.Type {
 		case "newapi":
-			if strings.TrimSpace(upstream.AccessToken) == "" && strings.TrimSpace(upstream.APIKey) == "" {
+			if strings.TrimSpace(upstream.APIKey) != "" {
+				return fmt.Errorf("upstream[%d].api_key is not supported for newapi", i)
+			}
+			if strings.TrimSpace(upstream.AccessToken) == "" {
 				return fmt.Errorf("upstream[%d].access_token is required", i)
-			}
-		case "cliproxyapi":
-			if strings.TrimSpace(upstream.ManagementKey) == "" && strings.TrimSpace(upstream.APIKey) == "" {
-				return fmt.Errorf("upstream[%d].management_key is required", i)
-			}
-		case "sub2api":
-			if strings.TrimSpace(upstream.APIKey) == "" {
-				return fmt.Errorf("upstream[%d].api_key is required", i)
 			}
 		case "generic":
 			if strings.TrimSpace(upstream.APIKey) == "" {
