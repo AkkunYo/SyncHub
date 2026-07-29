@@ -192,6 +192,43 @@ func TestAdapterResolverUsesInjectedClientConfiguredTimeoutAndAdminAuth(t *testi
 	}
 }
 
+func TestAdapterResolverModeStatusUsesOnlyMatchingCachedIdentity(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/user/self" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"success":true,"data":{"role":1,"group":"default"}}`)
+	}))
+	t.Cleanup(server.Close)
+	store := &memoryConfigStore{cfg: config.Default()}
+	resolver := NewAdapterResolver(store, server.Client())
+	cfg := config.UpstreamConfig{ID: "source-a", Type: "newapi", BaseURL: server.URL, AccessToken: "test-token", DiscoveryMode: "auto"}
+
+	if got := resolver.DiscoveryModeStatus(cfg); got.Status != "unresolved" || got.EffectiveMode != "unresolved" {
+		t.Fatalf("uncached status = %#v", got)
+	}
+	adapter, err := resolver.ResolveUpstream(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.Capabilities(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolver.DiscoveryModeStatus(cfg); got.Status != "ready" || got.EffectiveMode != "token" {
+		t.Fatalf("cached status = %#v", got)
+	}
+
+	changed := cfg
+	changed.AccessToken = "changed-token"
+	if got := resolver.DiscoveryModeStatus(changed); got.Status != "unresolved" || got.EffectiveMode != "unresolved" {
+		t.Fatalf("changed identity reused stale status = %#v", got)
+	}
+}
+
 func TestAdapterResolverErrorsDoNotExposeCredentials(t *testing.T) {
 	t.Parallel()
 

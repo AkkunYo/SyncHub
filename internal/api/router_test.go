@@ -152,6 +152,13 @@ type fakeResolver struct {
 	upstreamErr   map[string]error
 	targetCalls   []string
 	upstreamCalls []string
+	modeStatuses  map[string]platform.DiscoveryModeStatus
+}
+
+func (r *fakeResolver) DiscoveryModeStatus(cfg config.UpstreamConfig) platform.DiscoveryModeStatus {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.modeStatuses[cfg.ID]
 }
 
 func (r *fakeResolver) ResolveTarget(_ context.Context, cfg config.TargetConfig) (platform.TargetAdapter, platform.TargetCapabilities, error) {
@@ -364,8 +371,9 @@ func newTestEnvironment() *testEnvironment {
 					}},
 				},
 			},
-			upstreams:   map[string]platform.UpstreamAdapter{"source-a": upstream},
-			upstreamErr: map[string]error{},
+			upstreams:    map[string]platform.UpstreamAdapter{"source-a": upstream},
+			upstreamErr:  map[string]error{},
+			modeStatuses: map[string]platform.DiscoveryModeStatus{},
 		},
 		discovery: disc,
 		fakeDisc:  disc,
