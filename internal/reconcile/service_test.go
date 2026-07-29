@@ -63,6 +63,28 @@ func TestServicePreservesMappingsWhenTargetListFails(t *testing.T) {
 	}
 }
 
+func TestServiceReportDeepCopiesUpstreamGroup(t *testing.T) {
+	t.Parallel()
+
+	stored := mapping("asset-1", "target", "channel-1", platform.ChannelSnapshot{Models: []string{"gpt-4o"}})
+	stored.UpstreamGroup = &platform.UpstreamGroupSnapshot{
+		Group: "vip", Ratio: 1.5, RatioKnown: true,
+		Models: []string{"gpt-4o"}, ModelsVerified: true,
+	}
+	repository := &fakeRepository{mappings: []platform.SyncMapping{stored}}
+	service := NewService(repository)
+	report, err := service.Check(context.Background(), "target", &fakeTarget{channels: []platform.Channel{{ID: "channel-1", Models: []string{"gpt-4o"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	group := report.Mappings[0].Mapping.UpstreamGroup
+	group.Group = "mutated"
+	group.Models[0] = "mutated-model"
+	if got := repository.mappings[0].UpstreamGroup; got.Group != "vip" || !reflect.DeepEqual(got.Models, []string{"gpt-4o"}) {
+		t.Fatalf("reconcile report shared upstream group storage: %#v", got)
+	}
+}
+
 func TestServiceAcceptDriftUpdatesOnlyTheSelectedMappingSnapshot(t *testing.T) {
 	t.Parallel()
 
