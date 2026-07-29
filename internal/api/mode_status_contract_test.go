@@ -44,7 +44,7 @@ func TestConfigExposesOnlyStableModeErrorCode(t *testing.T) {
 func TestCreateAndUpdateNewAPIUpstreamDiscoverySettings(t *testing.T) {
 	env := newTestEnvironment()
 	router := env.router(t)
-	create := `{"id":"source-b","name":"Source B","type":"newapi","base_url":"https://source-b.example.com","access_token":"test-token","discovery_mode":"token","manage_tokens":true}`
+	create := `{"id":"source-b","name":"Source B","type":"newapi","base_url":"https://source-b.example.com","access_token":"test-token","manage_tokens":true}`
 	recorder, envelope := request(t, router, http.MethodPost, "/api/v1/upstreams", create, "application/json")
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("create status=%d body=%s", recorder.Code, recorder.Body.String())

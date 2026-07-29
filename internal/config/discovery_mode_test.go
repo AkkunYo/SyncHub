@@ -17,7 +17,7 @@ func newAPIUpstreamConfig() UpstreamConfig {
 	}
 }
 
-func TestValidateDefaultsDiscoveryModeToAutoForNewAPI(t *testing.T) {
+func TestValidateDefaultsDiscoveryModeToTokenForNewAPI(t *testing.T) {
 	t.Parallel()
 
 	cfg := validTestConfig()
@@ -25,8 +25,8 @@ func TestValidateDefaultsDiscoveryModeToAutoForNewAPI(t *testing.T) {
 	if err := Validate(&cfg); err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
-	if got := cfg.Upstreams[0].DiscoveryMode; got != DiscoveryModeAuto {
-		t.Fatalf("discovery_mode = %q, want %q", got, DiscoveryModeAuto)
+	if got := cfg.Upstreams[0].DiscoveryMode; got != DiscoveryModeToken {
+		t.Fatalf("discovery_mode = %q, want %q", got, DiscoveryModeToken)
 	}
 }
 
