@@ -672,6 +672,108 @@ func TestConfigResourceConflictsAndUpstreamCRUD(t *testing.T) {
 	}
 }
 
+func TestGenericUpstreamCRUDUsesOnlySharedAPIKeyAndRedactsIt(t *testing.T) {
+	env := newTestEnvironment()
+	router := env.router(t)
+
+	create := `{"id":"source-generic","name":"Shared Endpoint","type":"generic","base_url":"https://provider.example.com/v1/","api_key":"` + testSecret + `"}`
+	recorder, envelope := request(t, router, http.MethodPost, "/api/v1/upstreams", create, "application/json")
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), testSecret) || strings.Contains(recorder.Body.String(), "api_key") {
+		t.Fatalf("create response leaked shared key: %s", recorder.Body.String())
+	}
+	created := dataObject(t, envelope)
+	if created["type"] != "generic" || created["base_url"] != "https://provider.example.com/v1" {
+		t.Fatalf("created generic upstream = %#v", created)
+	}
+	for _, forbidden := range []string{"user_id", "discovery_mode", "effective_discovery_mode", "mode_status", "manage_tokens"} {
+		if _, exists := created[forbidden]; exists {
+			t.Fatalf("generic response exposed %q: %#v", forbidden, created)
+		}
+	}
+
+	update := `{"name":"Shared Endpoint 2","base_url":"https://provider-2.example.com/v1"}`
+	recorder, _ = request(t, router, http.MethodPut, "/api/v1/upstreams/source-generic", update, "application/json")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("update status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var updated config.UpstreamConfig
+	for _, upstream := range env.store.cfg.Upstreams {
+		if upstream.ID == "source-generic" {
+			updated = upstream
+		}
+	}
+	if updated.APIKey != testSecret || updated.Name != "Shared Endpoint 2" {
+		t.Fatalf("credential was not retained: %#v", updated)
+	}
+
+	const replacement = "replacement-shared-key"
+	update = `{"name":"Shared Endpoint 2","base_url":"https://provider-2.example.com/v1","api_key":"` + replacement + `"}`
+	recorder, _ = request(t, router, http.MethodPut, "/api/v1/upstreams/source-generic", update, "application/json")
+	if recorder.Code != http.StatusOK || strings.Contains(recorder.Body.String(), replacement) || strings.Contains(recorder.Body.String(), "api_key") {
+		t.Fatalf("credential update status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	for _, upstream := range env.store.cfg.Upstreams {
+		if upstream.ID == "source-generic" && upstream.APIKey != replacement {
+			t.Fatalf("replacement credential was not stored: %#v", upstream)
+		}
+	}
+}
+
+func TestGenericUpstreamCRUDRejectsLoginAndManagementFields(t *testing.T) {
+	t.Parallel()
+
+	createFields := []string{
+		`"access_token":"user-token"`,
+		`"management_key":"management-key"`,
+		`"proxy_api_key":"proxy-key"`,
+		`"user_id":1`,
+		`"discovery_mode":"token"`,
+		`"manage_tokens":true`,
+		`"managed_token_namespace":"synchub"`,
+	}
+	for _, field := range createFields {
+		field := field
+		t.Run("create "+field, func(t *testing.T) {
+			t.Parallel()
+			env := newTestEnvironment()
+			body := `{"id":"source-generic","name":"Shared Endpoint","type":"generic","base_url":"https://provider.example.com/v1","api_key":"shared-key",` + field + `}`
+			recorder, envelope := request(t, env.router(t), http.MethodPost, "/api/v1/upstreams", body, "application/json")
+			if recorder.Code != http.StatusBadRequest || errorCode(t, envelope) != "invalid_request" {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+
+	updateFields := []string{
+		`"access_token":"user-token"`,
+		`"management_key":"management-key"`,
+		`"proxy_api_key":"proxy-key"`,
+		`"user_id":1`,
+		`"discovery_mode":"token"`,
+		`"manage_tokens":true`,
+		`"api_key":""`,
+	}
+	for _, field := range updateFields {
+		field := field
+		t.Run("update "+field, func(t *testing.T) {
+			t.Parallel()
+			env := newTestEnvironment()
+			env.store.cfg.Upstreams = append(env.store.cfg.Upstreams, config.UpstreamConfig{
+				ID: "source-generic", Name: "Shared Endpoint", Type: "generic",
+				BaseURL: "https://provider.example.com/v1", APIKey: "shared-key",
+			})
+			body := `{"name":"Shared Endpoint","base_url":"https://provider.example.com/v1",` + field + `}`
+			recorder, envelope := request(t, env.router(t), http.MethodPut, "/api/v1/upstreams/source-generic", body, "application/json")
+			if recorder.Code != http.StatusBadRequest || errorCode(t, envelope) != "invalid_request" {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+}
+
 func TestTargetChannelsAreLiveAndAnnotated(t *testing.T) {
 	env := newTestEnvironment()
 	target := env.resolver.targets["target-a"].adapter.(*fakeTarget)

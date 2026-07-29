@@ -18,6 +18,7 @@ import (
 	"github.com/AkkunYo/SyncHub/internal/config"
 	"github.com/AkkunYo/SyncHub/internal/platform"
 	"github.com/AkkunYo/SyncHub/internal/platform/cliproxyapi"
+	"github.com/AkkunYo/SyncHub/internal/platform/generic"
 	"github.com/AkkunYo/SyncHub/internal/platform/newapi"
 	"github.com/AkkunYo/SyncHub/internal/platform/sub2api"
 )
@@ -87,6 +88,13 @@ func TestAdapterResolverConstructsSupportedAdapters(t *testing.T) {
 			wantType: (*cliproxyapi.Source)(nil),
 		},
 		{
+			name: "generic",
+			config: config.UpstreamConfig{
+				ID: "generic-source", Name: "Shared Endpoint", Type: "generic", BaseURL: "https://generic.example.test/v1", APIKey: "test-shared-key",
+			},
+			wantType: (*generic.Source)(nil),
+		},
+		{
 			name: "Sub2Api",
 			config: config.UpstreamConfig{
 				ID: "sub-source", Type: "sub2api", BaseURL: "https://sub.example.test", APIKey: "test-admin-key",
@@ -106,6 +114,38 @@ func TestAdapterResolverConstructsSupportedAdapters(t *testing.T) {
 				t.Fatalf("adapter type = %v, want %v", got, want)
 			}
 		})
+	}
+}
+
+func TestAdapterResolverForwardsGenericNameURLAndAPIKey(t *testing.T) {
+	t.Parallel()
+
+	const sharedKey = "REPLACE_WITH_GENERIC_SHARED_KEY"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/models" {
+			t.Errorf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer "+sharedKey {
+			t.Errorf("Authorization = %q", got)
+		}
+		_, _ = io.WriteString(w, `{"data":[{"id":"gpt-4o-mini"}]}`)
+	}))
+	t.Cleanup(server.Close)
+
+	resolver := NewAdapterResolver(&memoryConfigStore{cfg: config.Default()}, server.Client())
+	adapter, err := resolver.ResolveUpstream(context.Background(), config.UpstreamConfig{
+		ID: "generic-source", Name: "Shared Endpoint", Type: "generic",
+		BaseURL: server.URL + "/v1", APIKey: sharedKey,
+	})
+	if err != nil {
+		t.Fatalf("ResolveUpstream() error = %v", err)
+	}
+	page, err := adapter.ListAssets(context.Background(), platform.PageCursor{})
+	if err != nil {
+		t.Fatalf("ListAssets() error = %v", err)
+	}
+	if len(page.Assets) != 1 || page.Assets[0].Name != "Shared Endpoint" || page.Assets[0].ID != "generic-source:endpoint" {
+		t.Fatalf("generic assets = %#v", page.Assets)
 	}
 }
 
