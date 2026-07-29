@@ -44,10 +44,11 @@ type Source struct {
 	transport transport
 	catalog   *platform.ProviderCatalog
 
-	mu           sync.RWMutex
-	records      map[string]assetRecord
-	resolvedMode discoveryMode
-	userRole     int
+	mu            sync.RWMutex
+	records       map[string]assetRecord
+	resolvedMode  discoveryMode
+	userRole      int
+	modeErrorCode string
 }
 
 type assetRecord struct {
@@ -419,11 +420,48 @@ func (s *Source) ensureMode(ctx context.Context) (discoveryMode, error) {
 
 	resolved, role, err := s.probe(ctx)
 	if err != nil {
+		s.modeErrorCode = discoveryModeErrorCode(err)
 		return modeUnresolved, err
 	}
 	s.resolvedMode = resolved
 	s.userRole = role
+	s.modeErrorCode = ""
 	return resolved, nil
+}
+
+func (s *Source) DiscoveryModeStatus() platform.DiscoveryModeStatus {
+	if s == nil {
+		return platform.DiscoveryModeStatus{EffectiveMode: "unresolved", Status: "unresolved"}
+	}
+	s.mu.RLock()
+	mode := s.resolvedMode
+	errorCode := s.modeErrorCode
+	s.mu.RUnlock()
+	if mode == modeChannel {
+		return platform.DiscoveryModeStatus{EffectiveMode: "channel", Status: "ready"}
+	}
+	if mode == modeToken {
+		return platform.DiscoveryModeStatus{EffectiveMode: "token", Status: "ready"}
+	}
+	if errorCode != "" {
+		return platform.DiscoveryModeStatus{EffectiveMode: "unresolved", Status: "error", ErrorCode: errorCode}
+	}
+	return platform.DiscoveryModeStatus{EffectiveMode: "unresolved", Status: "unresolved"}
+}
+
+func discoveryModeErrorCode(err error) string {
+	switch {
+	case errors.Is(err, ErrUnauthenticated):
+		return "upstream_unauthenticated"
+	case errors.Is(err, ErrInsufficientPrivilege):
+		return "insufficient_privilege"
+	case errors.Is(err, platform.ErrRateLimited):
+		return "rate_limited"
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+		return "upstream_timeout"
+	default:
+		return "upstream_failure"
+	}
 }
 
 func (s *Source) probe(ctx context.Context) (discoveryMode, int, error) {

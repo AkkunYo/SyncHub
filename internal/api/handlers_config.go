@@ -24,7 +24,8 @@ func (s *server) getConfig(c *gin.Context) {
 		writeFailure(c, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	writeSuccess(c, http.StatusOK, redactConfig(s.deps.Config.Snapshot()))
+	cfg := s.deps.Config.Snapshot()
+	writeSuccess(c, http.StatusOK, redactConfigWithModeStatus(cfg, s.deps.Adapters))
 }
 
 func (s *server) updateApp(c *gin.Context) {
@@ -203,7 +204,7 @@ func (s *server) createUpstream(c *gin.Context) {
 		return
 	}
 	c.Header("Location", "/api/v1/upstreams/"+upstream.ID)
-	writeSuccess(c, http.StatusCreated, redactUpstream(upstream))
+	writeSuccess(c, http.StatusCreated, redactUpstreamWithModeStatus(upstream, s.deps.Adapters))
 }
 
 func (s *server) updateUpstream(c *gin.Context) {
@@ -242,6 +243,9 @@ func (s *server) updateUpstream(c *gin.Context) {
 		if err := applyUpstreamUserID(upstream, request.UserID); err != nil {
 			return err
 		}
+		if err := applyUpstreamDiscoverySettings(upstream, request.DiscoveryMode, request.ManageTokens); err != nil {
+			return err
+		}
 		upstream.Name = name
 		upstream.BaseURL = baseURL
 		updated = *upstream
@@ -255,7 +259,7 @@ func (s *server) updateUpstream(c *gin.Context) {
 		respondDependencyError(c, err, invalidRequestError)
 		return
 	}
-	writeSuccess(c, http.StatusOK, redactUpstream(updated))
+	writeSuccess(c, http.StatusOK, redactUpstreamWithModeStatus(updated, s.deps.Adapters))
 }
 
 func (s *server) deleteUpstream(c *gin.Context) {
@@ -352,11 +356,17 @@ func validateUpstreamCreate(request upstreamCreateRequest) (config.UpstreamConfi
 		}
 		upstream.AccessToken = request.AccessToken
 		upstream.APIKey = request.APIKey
+		mode, err := normalizeDiscoveryMode(request.DiscoveryMode)
+		if err != nil {
+			return config.UpstreamConfig{}, err
+		}
+		upstream.DiscoveryMode = mode
+		upstream.ManageTokens = request.ManageTokens
 		if request.UserID.set {
 			upstream.UserID = request.UserID.value
 		}
 	case "cliproxyapi":
-		if request.UserID.set || request.AccessToken != "" || (request.ManagementKey == "" && request.APIKey == "") ||
+		if request.UserID.set || request.AccessToken != "" || request.DiscoveryMode != "" || request.ManageTokens || (request.ManagementKey == "" && request.APIKey == "") ||
 			(request.ManagementKey != "" && validateCredential(request.ManagementKey) != nil) ||
 			(request.APIKey != "" && validateCredential(request.APIKey) != nil) || validateOptionalProxyCredential(request.ProxyAPIKey) != nil {
 			return config.UpstreamConfig{}, errInvalidInput
@@ -365,7 +375,7 @@ func validateUpstreamCreate(request upstreamCreateRequest) (config.UpstreamConfi
 		upstream.APIKey = request.APIKey
 		upstream.ProxyAPIKey = request.ProxyAPIKey.value
 	case "sub2api":
-		if request.UserID.set || request.AccessToken != "" || request.ManagementKey != "" || request.ProxyAPIKey.set || validateCredential(request.APIKey) != nil {
+		if request.UserID.set || request.AccessToken != "" || request.ManagementKey != "" || request.ProxyAPIKey.set || request.DiscoveryMode != "" || request.ManageTokens || validateCredential(request.APIKey) != nil {
 			return config.UpstreamConfig{}, errInvalidInput
 		}
 		upstream.APIKey = request.APIKey
@@ -373,6 +383,42 @@ func validateUpstreamCreate(request upstreamCreateRequest) (config.UpstreamConfi
 		return config.UpstreamConfig{}, errInvalidInput
 	}
 	return upstream, nil
+}
+
+func normalizeDiscoveryMode(value string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return config.DiscoveryModeAuto, nil
+	}
+	switch value {
+	case config.DiscoveryModeAuto, config.DiscoveryModeChannel, config.DiscoveryModeToken:
+		return value, nil
+	default:
+		return "", errInvalidInput
+	}
+}
+
+func applyUpstreamDiscoverySettings(upstream *config.UpstreamConfig, mode optionalString, manage optionalBool) error {
+	if upstream.Type != "newapi" {
+		if mode.set || manage.set {
+			return errInvalidInput
+		}
+		return nil
+	}
+	if mode.set {
+		if mode.null {
+			return errInvalidInput
+		}
+		normalized, err := normalizeDiscoveryMode(mode.value)
+		if err != nil {
+			return err
+		}
+		upstream.DiscoveryMode = normalized
+	}
+	if manage.set {
+		upstream.ManageTokens = manage.value
+	}
+	return nil
 }
 
 func validateOptionalCredentials(values ...optionalString) error {

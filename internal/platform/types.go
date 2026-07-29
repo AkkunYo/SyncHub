@@ -105,6 +105,18 @@ type GroupCatalogProvider interface {
 	GroupCatalog(ctx context.Context) (GroupCatalog, error)
 }
 
+// DiscoveryModeStatus is a sanitized view of runtime mode probing. ErrorCode
+// is stable API metadata and never contains an upstream response body.
+type DiscoveryModeStatus struct {
+	EffectiveMode string `json:"effective_discovery_mode"`
+	Status        string `json:"mode_status"`
+	ErrorCode     string `json:"mode_error_code,omitempty"`
+}
+
+type DiscoveryModeStatusProvider interface {
+	DiscoveryModeStatus() DiscoveryModeStatus
+}
+
 type SecretGrant struct {
 	SecurityProof string `json:"-"`
 	AllowAuthFile bool   `json:"-"`

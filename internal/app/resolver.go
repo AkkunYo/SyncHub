@@ -158,6 +158,33 @@ func (r *AdapterResolver) ResolveUpstream(ctx context.Context, cfg config.Upstre
 	return source, nil
 }
 
+func (r *AdapterResolver) DiscoveryModeStatus(cfg config.UpstreamConfig) platform.DiscoveryModeStatus {
+	unresolved := platform.DiscoveryModeStatus{EffectiveMode: "unresolved", Status: "unresolved"}
+	if strings.ToLower(strings.TrimSpace(cfg.Type)) != "newapi" {
+		return unresolved
+	}
+	if r == nil || isNilDependency(r.config) {
+		return unresolved
+	}
+	timeout := time.Duration(r.config.Snapshot().App.RequestTimeout)
+	if timeout <= 0 {
+		return unresolved
+	}
+	identity := newUpstreamIdentity(cfg, timeout)
+	r.upstreamMu.Lock()
+	cached, exists := r.upstreamCache[strings.TrimSpace(cfg.ID)]
+	r.upstreamMu.Unlock()
+	if exists && cached.identity == identity {
+		if provider, ok := cached.adapter.(platform.DiscoveryModeStatusProvider); ok && !isNilDependency(provider) {
+			return provider.DiscoveryModeStatus()
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(cfg.DiscoveryMode), config.DiscoveryModeToken) {
+		return platform.DiscoveryModeStatus{EffectiveMode: "token", Status: "ready"}
+	}
+	return unresolved
+}
+
 func newUpstreamIdentity(cfg config.UpstreamConfig, timeout time.Duration) upstreamIdentity {
 	sourceType := strings.ToLower(strings.TrimSpace(cfg.Type))
 	credential := ""

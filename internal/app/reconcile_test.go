@@ -192,6 +192,10 @@ func (r *fakeResolver) ResolveUpstream(ctx context.Context, cfg config.UpstreamC
 	return r.resolveUpstream(ctx, cfg)
 }
 
+func (r *fakeResolver) DiscoveryModeStatus(config.UpstreamConfig) platform.DiscoveryModeStatus {
+	return platform.DiscoveryModeStatus{EffectiveMode: "unresolved", Status: "unresolved"}
+}
+
 type staticTarget struct {
 	channels []platform.Channel
 	listErr  error

@@ -37,6 +37,7 @@ type ConfigStore interface {
 type AdapterResolver interface {
 	ResolveTarget(ctx context.Context, cfg config.TargetConfig) (platform.TargetAdapter, platform.TargetCapabilities, error)
 	ResolveUpstream(ctx context.Context, cfg config.UpstreamConfig) (platform.UpstreamAdapter, error)
+	DiscoveryModeStatus(cfg config.UpstreamConfig) platform.DiscoveryModeStatus
 }
 
 type DiscoveryService interface {

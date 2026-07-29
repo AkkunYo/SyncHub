@@ -2,12 +2,31 @@ package newapi
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/AkkunYo/SyncHub/internal/platform"
 )
+
+func TestDiscoveryModeErrorCodeUsesStableClasses(t *testing.T) {
+	tests := []struct {
+		err  error
+		want string
+	}{
+		{ErrUnauthenticated, "upstream_unauthenticated"},
+		{ErrInsufficientPrivilege, "insufficient_privilege"},
+		{&platform.RateLimitError{}, "rate_limited"},
+		{context.DeadlineExceeded, "upstream_timeout"},
+		{errors.New("raw upstream body"), "upstream_failure"},
+	}
+	for _, test := range tests {
+		if got := discoveryModeErrorCode(test.err); got != test.want {
+			t.Fatalf("discoveryModeErrorCode(%v) = %q, want %q", test.err, got, test.want)
+		}
+	}
+}
 
 func TestModeStatusIsSafeAndTracksAutoProbe(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

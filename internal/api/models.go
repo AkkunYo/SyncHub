@@ -42,12 +42,17 @@ type publicTarget struct {
 }
 
 type publicUpstream struct {
-	ID           string                 `json:"id"`
-	Name         string                 `json:"name"`
-	Type         string                 `json:"type"`
-	BaseURL      string                 `json:"base_url"`
-	UserID       int                    `json:"user_id,omitempty"`
-	SyncMappings []platform.SyncMapping `json:"sync_mappings"`
+	ID                     string                 `json:"id"`
+	Name                   string                 `json:"name"`
+	Type                   string                 `json:"type"`
+	BaseURL                string                 `json:"base_url"`
+	UserID                 int                    `json:"user_id,omitempty"`
+	DiscoveryMode          string                 `json:"discovery_mode,omitempty"`
+	EffectiveDiscoveryMode string                 `json:"effective_discovery_mode,omitempty"`
+	ModeStatus             string                 `json:"mode_status,omitempty"`
+	ModeErrorCode          string                 `json:"mode_error_code,omitempty"`
+	ManageTokens           bool                   `json:"manage_tokens"`
+	SyncMappings           []platform.SyncMapping `json:"sync_mappings"`
 }
 
 type publicConfig struct {
@@ -84,6 +89,19 @@ type optionalString struct {
 type optionalInt struct {
 	set   bool
 	value int
+}
+
+type optionalBool struct {
+	set   bool
+	value bool
+}
+
+func (o *optionalBool) UnmarshalJSON(data []byte) error {
+	o.set = true
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return errInvalidInput
+	}
+	return json.Unmarshal(data, &o.value)
 }
 
 func (o *optionalInt) UnmarshalJSON(data []byte) error {
@@ -124,6 +142,8 @@ type upstreamCreateRequest struct {
 	APIKey        string         `json:"api_key,omitempty"`
 	ProxyAPIKey   optionalString `json:"proxy_api_key"`
 	UserID        optionalInt    `json:"user_id"`
+	DiscoveryMode string         `json:"discovery_mode,omitempty"`
+	ManageTokens  bool           `json:"manage_tokens,omitempty"`
 }
 
 type upstreamUpdateRequest struct {
@@ -134,6 +154,8 @@ type upstreamUpdateRequest struct {
 	APIKey        optionalString `json:"api_key"`
 	ProxyAPIKey   optionalString `json:"proxy_api_key"`
 	UserID        optionalInt    `json:"user_id"`
+	DiscoveryMode optionalString `json:"discovery_mode"`
+	ManageTokens  optionalBool   `json:"manage_tokens"`
 }
 
 type channelUpdateRequest struct {
@@ -256,6 +278,48 @@ func redactConfig(cfg config.Config) publicConfig {
 	return result
 }
 
+func redactConfigWithModeStatus(cfg config.Config, resolver AdapterResolver) publicConfig {
+	result := redactConfig(cfg)
+	for i, upstream := range cfg.Upstreams {
+		result.Upstreams[i] = applyDiscoveryModeStatus(result.Upstreams[i], upstream, resolver)
+	}
+	return result
+}
+
+func redactUpstreamWithModeStatus(upstream config.UpstreamConfig, resolver AdapterResolver) publicUpstream {
+	return applyDiscoveryModeStatus(redactUpstream(upstream), upstream, resolver)
+}
+
+func applyDiscoveryModeStatus(result publicUpstream, upstream config.UpstreamConfig, resolver AdapterResolver) publicUpstream {
+	if upstream.Type != "newapi" {
+		return result
+	}
+	status := resolver.DiscoveryModeStatus(upstream)
+	switch status.EffectiveMode {
+	case "channel", "token", "unresolved":
+	default:
+		status.EffectiveMode = "unresolved"
+	}
+	switch status.Status {
+	case "ready", "error", "unresolved":
+	default:
+		status.Status = "unresolved"
+	}
+	if status.Status != "error" {
+		status.ErrorCode = ""
+	} else {
+		switch status.ErrorCode {
+		case "upstream_unauthenticated", "insufficient_privilege", "rate_limited", "upstream_timeout", "upstream_failure":
+		default:
+			status.ErrorCode = "upstream_failure"
+		}
+	}
+	result.EffectiveDiscoveryMode = status.EffectiveMode
+	result.ModeStatus = status.Status
+	result.ModeErrorCode = status.ErrorCode
+	return result
+}
+
 func redactTarget(target config.TargetConfig) publicTarget {
 	return publicTarget{ID: target.ID, Name: target.Name, Type: target.Type, BaseURL: target.BaseURL, UserID: target.UserID}
 }
@@ -266,7 +330,8 @@ func redactUpstream(upstream config.UpstreamConfig) publicUpstream {
 		mappings = []platform.SyncMapping{}
 	}
 	return publicUpstream{
-		ID: upstream.ID, Name: upstream.Name, Type: upstream.Type, BaseURL: upstream.BaseURL, UserID: upstream.UserID, SyncMappings: mappings,
+		ID: upstream.ID, Name: upstream.Name, Type: upstream.Type, BaseURL: upstream.BaseURL, UserID: upstream.UserID,
+		DiscoveryMode: upstream.DiscoveryMode, ManageTokens: upstream.ManageTokens, SyncMappings: mappings,
 	}
 }
 
