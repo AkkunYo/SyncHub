@@ -204,14 +204,30 @@ func (d *fakeDiscovery) Snapshot(sourceID string) (discovery.Snapshot, bool) {
 }
 
 type fakeSyncService struct {
-	mu          stdsync.Mutex
-	result      syncservice.BatchResult
-	err         error
-	calls       int
-	sourceID    string
-	concurrency int
-	request     syncservice.BatchRequest
-	fn          func(context.Context, string, int, syncservice.BatchRequest) (syncservice.BatchResult, error)
+	mu           stdsync.Mutex
+	result       syncservice.BatchResult
+	multiResult  syncservice.MultiResult
+	err          error
+	calls        int
+	sourceID     string
+	concurrency  int
+	request      syncservice.BatchRequest
+	multiRequest syncservice.MultiRequest
+	fn           func(context.Context, string, int, syncservice.BatchRequest) (syncservice.BatchResult, error)
+	multiFn      func(context.Context, string, int, syncservice.MultiRequest) (syncservice.MultiResult, error)
+}
+
+func (s *fakeSyncService) SyncUnits(ctx context.Context, sourceID string, concurrency int, request syncservice.MultiRequest) (syncservice.MultiResult, error) {
+	if s.multiFn != nil {
+		return s.multiFn(ctx, sourceID, concurrency, request)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	s.sourceID = sourceID
+	s.concurrency = concurrency
+	s.multiRequest = request
+	return s.multiResult, s.err
 }
 
 func (s *fakeSyncService) Sync(ctx context.Context, sourceID string, concurrency int, request syncservice.BatchRequest) (syncservice.BatchResult, error) {

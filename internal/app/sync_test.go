@@ -113,6 +113,58 @@ func TestSyncServiceRejectsNilAndBlankSourceWithoutPanic(t *testing.T) {
 	}
 }
 
+func TestSyncServiceSyncUnitsBindsMappingsAndConcurrency(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+	cfg.Targets = append(cfg.Targets, config.TargetConfig{
+		ID: "target-a", Name: "target-a", Type: "newapi", BaseURL: "https://target.example.test", AccessToken: "test-console-token",
+	})
+	cfg.Upstreams = append(cfg.Upstreams, config.UpstreamConfig{
+		ID: "source-a", Name: "source-a", Type: "sub2api", BaseURL: "https://source.example.test", APIKey: "test-admin-key",
+	})
+	path := createConfigPath(t, cfg)
+	store, err := config.Open(path)
+	if err != nil {
+		t.Fatalf("config.Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	secretBytes := []byte("test-resolved-secret")
+	request := syncservice.MultiRequest{
+		Source: &fakeUpstream{secret: secretBytes},
+		Units: []syncservice.UnitRequest{{
+			UnitID: "u-1",
+			Asset: platform.UpstreamAsset{
+				ID: "source-a:key:asset-1", SourceID: "source-a", SourceType: "sub2api", Provider: platform.ProviderOpenAI,
+				Kind: platform.AssetStaticAPIKey, Name: "asset", Models: []string{"gpt-test"}, Enabled: true, SecretReadable: true,
+			},
+			Target: syncservice.TargetRequest{
+				ID: "target-a", Adapter: &probeTarget{id: "target-a", probe: &concurrencyProbe{}},
+				Capabilities: platform.TargetCapabilities{Platform: "newapi", Providers: map[string]platform.ProviderCapability{
+					platform.ProviderOpenAI: {Modes: []platform.SyncMode{platform.SyncModeStaticKey}},
+				}},
+			},
+			Settings: platform.ChannelSettings{Models: []string{"gpt-test"}, Group: "default", Weight: 100},
+		}},
+	}
+	result, err := NewSyncService(mapping.NewRepository(store)).SyncUnits(context.Background(), "source-a", 2, request)
+	if err != nil {
+		t.Fatalf("SyncUnits() error = %v", err)
+	}
+	if len(result.Units) != 1 || result.Units[0].Status != syncservice.TargetSynced {
+		t.Fatalf("result = %#v", result)
+	}
+	if got := store.Snapshot().Upstreams[0].SyncMappings; len(got) != 1 || got[0].UpstreamAssetID != "source-a:key:asset-1" {
+		t.Fatalf("mappings = %#v", got)
+	}
+	for i, value := range secretBytes {
+		if value != 0 {
+			t.Fatalf("resolved secret byte %d was not wiped", i)
+		}
+	}
+}
+
 type fakeUpstream struct {
 	secret []byte
 }

@@ -259,6 +259,59 @@ func TestRefreshPublishesAnEmptySnapshot(t *testing.T) {
 	}
 }
 
+func TestRefreshPublishesGroupCatalogAtomicallyAndReturnsDeepCopies(t *testing.T) {
+	t.Parallel()
+
+	service := NewService()
+	adapter := newScriptedAdapter(t, listStep{
+		want: platform.PageCursor{},
+		page: platform.AssetPage{Assets: []platform.UpstreamAsset{testAsset("token-1", "token")}},
+	})
+	adapter.capabilities = platform.SourceCapabilities{GroupCatalog: true}
+	adapter.catalog = platform.GroupCatalog{
+		SourceID:     "source-a",
+		DefaultGroup: "vip",
+		Groups: []platform.UpstreamGroup{{
+			Name: "vip", Description: "VIP", Ratio: 1.5, RatioKnown: true,
+			Models: []string{"gpt-4o"}, ModelsVerified: true,
+		}},
+	}
+
+	got, err := service.Refresh(context.Background(), "source-a", adapter)
+	if err != nil {
+		t.Fatalf("Refresh() error = %v", err)
+	}
+	if got.GroupCatalog == nil || got.GroupCatalog.DefaultGroup != "vip" || got.GroupCatalog.Groups[0].Models[0] != "gpt-4o" {
+		t.Fatalf("Refresh() group catalog = %#v", got.GroupCatalog)
+	}
+	if adapter.catalogCalls != 1 {
+		t.Fatalf("GroupCatalog() calls = %d, want 1", adapter.catalogCalls)
+	}
+
+	got.GroupCatalog.Groups[0].Models[0] = "caller-mutated"
+	stored, ok := service.Snapshot("source-a")
+	if !ok || stored.GroupCatalog == nil || stored.GroupCatalog.Groups[0].Models[0] != "gpt-4o" {
+		t.Fatalf("stored group catalog was mutated: %#v", stored.GroupCatalog)
+	}
+}
+
+func TestRefreshGroupCatalogFailurePreservesPreviousCompleteSnapshot(t *testing.T) {
+	t.Parallel()
+
+	service, old := seedSnapshot(t)
+	adapter := newScriptedAdapter(t, listStep{
+		want: platform.PageCursor{},
+		page: platform.AssetPage{Assets: []platform.UpstreamAsset{testAsset("new-token", "new token")}},
+	})
+	adapter.capabilities = platform.SourceCapabilities{GroupCatalog: true}
+	adapter.catalogErr = errors.New("group catalog failed")
+
+	if _, err := service.Refresh(context.Background(), "source-a", adapter); !errors.Is(err, adapter.catalogErr) {
+		t.Fatalf("Refresh() error = %v, want group catalog failure", err)
+	}
+	assertSnapshotEqual(t, service, old)
+}
+
 type listStep struct {
 	want         platform.PageCursor
 	page         platform.AssetPage
@@ -275,6 +328,10 @@ type scriptedAdapter struct {
 	cursors        []platform.PageCursor
 	resolveCalls   int
 	resolvedSecret string
+	capabilities   platform.SourceCapabilities
+	catalog        platform.GroupCatalog
+	catalogErr     error
+	catalogCalls   int
 }
 
 func newScriptedAdapter(t *testing.T, steps ...listStep) *scriptedAdapter {
@@ -283,7 +340,14 @@ func newScriptedAdapter(t *testing.T, steps ...listStep) *scriptedAdapter {
 }
 
 func (a *scriptedAdapter) Capabilities(context.Context) (platform.SourceCapabilities, error) {
-	return platform.SourceCapabilities{}, nil
+	return a.capabilities, nil
+}
+
+func (a *scriptedAdapter) GroupCatalog(context.Context) (platform.GroupCatalog, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.catalogCalls++
+	return a.catalog, a.catalogErr
 }
 
 func (a *scriptedAdapter) ListAssets(ctx context.Context, cursor platform.PageCursor) (platform.AssetPage, error) {
