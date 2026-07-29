@@ -24,8 +24,9 @@ type userGroupDetail struct {
 	Description string          `json:"desc"`
 }
 
-// pricingResponse is GET /api/pricing. It is the only endpoint a common user can
-// call that reveals which models each group actually enables.
+// pricingResponse is the optional GET /api/pricing enrichment. Core group
+// models come from authenticated GET /api/user/models?group=... because the
+// pricing navigation module may be disabled by an operator.
 type pricingResponse struct {
 	Success     bool               `json:"success"`
 	Data        []pricingItem      `json:"data"`
@@ -51,8 +52,8 @@ func (d userGroupDetail) ratioValue() (float64, bool) {
 	return ratio, true
 }
 
-// modelsByGroup inverts pricing's per-model enable_groups into a per-group model
-// list. A model enabled for "all" belongs to every usable group.
+// modelsByGroup inverts optional pricing data for display/cross-checking. It is
+// never used to replace a successfully verified per-group model response.
 func (p pricingResponse) modelsByGroup() map[string][]string {
 	models := make(map[string][]string, len(p.UsableGroup))
 	for group := range p.UsableGroup {
