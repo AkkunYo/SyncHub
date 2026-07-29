@@ -30,6 +30,11 @@ const navItems = [
 
 const driftCount = computed(() => store.driftItems.length)
 
+function formattedBuildDate(value: string): string {
+  const match = value.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})/)
+  return match ? `${match[1]} ${match[2]}` : value
+}
+
 function navigate(view: ViewName): void {
   store.navigate(view)
   mobileNavOpen.value = false
@@ -95,7 +100,11 @@ onUnmounted(() => {
       </nav>
       <div class="sidebar-status">
         <span class="health-dot" aria-hidden="true"></span>
-        <span>本地管理 API</span>
+        <div>
+          <span>本地管理 API</span>
+          <small v-if="store.runtimeInfo">版本 {{ store.runtimeInfo.version }}</small>
+          <small v-if="store.runtimeInfo">编译 {{ formattedBuildDate(store.runtimeInfo.build_date) }}</small>
+        </div>
       </div>
     </aside>
 

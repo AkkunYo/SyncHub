@@ -18,6 +18,7 @@ import (
 type Options struct {
 	ConfigPath         string
 	Version            string
+	BuildDate          string
 	HTTPClient         *http.Client
 	Runtime            *api.Runtime
 	RequestIDGenerator func() string
@@ -80,7 +81,7 @@ func New(options Options) (_ *Application, resultErr error) {
 		deps: api.Dependencies{
 			Config: store, Adapters: resolver, Discovery: discoveryService,
 			Sync: syncService, Mappings: mappings, Reconcile: reconcileService,
-			Version: strings.TrimSpace(options.Version), RequestIDGenerator: options.RequestIDGenerator,
+			Version: strings.TrimSpace(options.Version), BuildDate: strings.TrimSpace(options.BuildDate), RequestIDGenerator: options.RequestIDGenerator,
 		},
 		runtime: runtimeState,
 		closeFn: store.Close,

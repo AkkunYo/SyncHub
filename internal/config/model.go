@@ -213,7 +213,7 @@ func Validate(cfg *Config) error {
 		upstream.DiscoveryMode = strings.ToLower(strings.TrimSpace(upstream.DiscoveryMode))
 		if upstream.Type == "newapi" {
 			if upstream.DiscoveryMode == "" {
-				upstream.DiscoveryMode = DiscoveryModeAuto
+				upstream.DiscoveryMode = DiscoveryModeToken
 			}
 			switch upstream.DiscoveryMode {
 			case DiscoveryModeAuto, DiscoveryModeChannel, DiscoveryModeToken:

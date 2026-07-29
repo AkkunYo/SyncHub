@@ -3,6 +3,7 @@ import type {
   Channel,
   ChannelInput,
   MatrixData,
+  RuntimeInfo,
   SanitizedConfig,
   SyncResponse,
   TargetConfig,
@@ -115,6 +116,7 @@ function segment(value: string): string {
 }
 
 export const api = {
+  getHealth: (signal?: AbortSignal) => request<RuntimeInfo>('/health', { signal }),
   getConfig: (signal?: AbortSignal) => request<SanitizedConfig>('/config', { signal }),
   updateApp: (input: AppSettings) => request<AppSettings>('/config/app', { method: 'PUT', body: input }),
   createTarget: (input: Record<string, unknown>) =>

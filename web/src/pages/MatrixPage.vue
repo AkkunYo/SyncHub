@@ -107,13 +107,17 @@ function parseModels(): string[] {
   return [...new Set(models.value.split(',').map((model) => model.trim()).filter(Boolean))]
 }
 
-function failedTargets(targetIds: readonly string[], code = 'request_failed'): SyncTargetResult[] {
-  return targetIds.map((targetId) => ({
+function failedTarget(targetId: string, code = 'request_failed'): SyncTargetResult {
+  return {
     target_id: targetId,
     status: 'failed',
     code,
     retryable: true,
-  }))
+  }
+}
+
+function failedTargets(targetIds: readonly string[], code = 'request_failed'): SyncTargetResult[] {
+  return targetIds.map((targetId) => failedTarget(targetId, code))
 }
 
 async function submitSync(): Promise<void> {
@@ -157,42 +161,56 @@ function mergeSyncResults(current: AssetSyncResult[], completed: AssetSyncResult
 
 async function runSync(submittedRows: SubmittedRow[], merge: boolean): Promise<void> {
   submitting.value = true
-  let requestProof = securityProof.value
+  const requestGrant = {
+    security_proof: securityProof.value,
+    allow_auth_file: allowAuthFile.value,
+  }
   securityProof.value = ''
   try {
     const normalizedModels = parseModels()
-    const completed = await Promise.all(
-      submittedRows.map(async ({ row, targetIds }): Promise<AssetSyncResult> => {
-        try {
-          const response = await api.sync({
-            upstream_id: store.selectedUpstreamId,
-            asset_id: row.asset.id,
-            target_ids: targetIds,
-            settings: {
-              models: normalizedModels,
-              group: group.value.trim() || 'default',
-              priority: priority.value,
-              weight: weight.value,
-            },
-            grant: {
-              security_proof: requestProof,
-              allow_auth_file: allowAuthFile.value,
-            },
-          })
-          return { assetId: row.asset.id, assetName: row.asset.name, targets: response.targets }
-        } catch (error) {
-          return {
-            assetId: row.asset.id,
-            assetName: row.asset.name,
-            targets: failedTargets(targetIds, error instanceof Error ? 'request_failed' : 'internal_error'),
-          }
-        }
-      }),
+    let sequence = 0
+    const units = submittedRows.flatMap(({ row, targetIds }) =>
+      targetIds.map((targetId) => ({
+        unit_id: `sync-${++sequence}`,
+        asset_id: row.asset.id,
+        target_id: targetId,
+        upstream_group: row.asset.raw_type === 'newapi-token'
+          ? row.asset.metadata.upstream_group?.trim()
+          : undefined,
+        settings: {
+          models: normalizedModels,
+          target_group: group.value.trim() || 'default',
+          priority: priority.value,
+          weight: weight.value,
+        },
+      })),
     )
+    let completed: AssetSyncResult[]
+    try {
+      const response = await api.sync({
+        upstream_id: store.selectedUpstreamId,
+        units,
+        grant: requestGrant,
+      })
+      const byTuple = new Map(response.units.map((unit) => [`${unit.asset_id}\u0000${unit.target_id}`, unit]))
+      completed = submittedRows.map(({ row, targetIds }) => ({
+        assetId: row.asset.id,
+        assetName: row.asset.name,
+        targets: targetIds.map((targetId) =>
+          byTuple.get(`${row.asset.id}\u0000${targetId}`) ?? failedTarget(targetId, 'upstream_failure'),
+        ),
+      }))
+    } catch (error) {
+      completed = submittedRows.map(({ row, targetIds }) => ({
+        assetId: row.asset.id,
+        assetName: row.asset.name,
+        targets: failedTargets(targetIds, error instanceof Error ? 'request_failed' : 'internal_error'),
+      }))
+    }
     results.value = merge ? mergeSyncResults(results.value, completed) : completed
     store.applySyncResults(completed)
   } finally {
-    requestProof = ''
+    requestGrant.security_proof = ''
     submitting.value = false
   }
 }

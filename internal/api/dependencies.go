@@ -71,5 +71,6 @@ type Dependencies struct {
 	Reconcile ReconcileService
 
 	Version            string
+	BuildDate          string
 	RequestIDGenerator func() string
 }

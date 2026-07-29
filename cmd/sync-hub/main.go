@@ -229,6 +229,7 @@ func runService(ctx context.Context, options commandOptions, deps runtimeDepende
 	application, err := deps.newApplication(app.Options{
 		ConfigPath: options.configPath,
 		Version:    version,
+		BuildDate:  buildDate,
 	})
 	if err != nil || application == nil {
 		return errStartup

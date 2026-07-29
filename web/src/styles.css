@@ -270,6 +270,20 @@ h3 {
   font-size: 12px;
 }
 
+.sidebar-status > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sidebar-status small {
+  overflow: hidden;
+  color: rgba(181, 194, 211, 0.78);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .health-dot {
   width: 8px;
   height: 8px;

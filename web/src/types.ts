@@ -33,6 +33,12 @@ export interface SanitizedConfig {
   upstreams: UpstreamConfig[]
 }
 
+export interface RuntimeInfo {
+  status: string
+  version: string
+  build_date: string
+}
+
 export type AssetKind = 'static_api_key' | 'oauth_auth_file' | 'proxy_endpoint_key'
 
 export interface UpstreamAsset {
@@ -119,15 +125,21 @@ export interface SyncSettings {
 }
 
 export interface SyncTargetResult {
+  unit_id?: string
+  asset_id?: string
   target_id: string
   status: SyncStatus
   channel_id?: string
   code?: string
   retryable?: boolean
+  retry_after_seconds?: number
+  effective_models?: string[]
+  excluded_models?: string[]
+  warnings?: string[]
 }
 
 export interface SyncResponse {
-  targets: SyncTargetResult[]
+  units: SyncTargetResult[]
 }
 
 export interface AssetSyncResult {

@@ -16,7 +16,7 @@ func (s *server) health(c *gin.Context) {
 		writeFailure(c, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	writeSuccess(c, http.StatusOK, gin.H{"status": "ok", "version": s.deps.Version})
+	writeSuccess(c, http.StatusOK, gin.H{"status": "ok", "version": s.deps.Version, "build_date": s.deps.BuildDate})
 }
 
 func (s *server) getConfig(c *gin.Context) {
@@ -388,7 +388,7 @@ func validateUpstreamCreate(request upstreamCreateRequest) (config.UpstreamConfi
 func normalizeDiscoveryMode(value string) (string, error) {
 	value = strings.ToLower(strings.TrimSpace(value))
 	if value == "" {
-		return config.DiscoveryModeAuto, nil
+		return config.DiscoveryModeToken, nil
 	}
 	switch value {
 	case config.DiscoveryModeAuto, config.DiscoveryModeChannel, config.DiscoveryModeToken:

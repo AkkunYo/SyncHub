@@ -18,7 +18,7 @@ SyncHub 是面向 AI API 分发系统的资产与渠道同步中枢。它以单�
 | CLIProxyAPI（CPA） | 支持 | 支持 |
 | Sub2Api | 支持 | - |
 
-New API 配置中的 `access_token` 是管理员/Root 控制台访问令牌，不是用于模型调用的 API Key。要求 `New-Api-User` 的旧版实例还需配置 Token 所属用户的正整数 `user_id`；读取渠道秘密时，上游 New API 仍可能要求当次 Root 安全证明。
+New API 目标配置使用管理员控制台访问令牌。New API 上游默认使用普通用户 PAT 的令牌模式，只读取该用户自己的 API 令牌；显式启用渠道模式时才需要 Admin/Root 权限与当次安全证明。要求 `New-Api-User` 的旧版实例还需配置令牌所属用户的正整数 `user_id`。
 
 CLIProxyAPI 上游使用 `management_key` 读取管理元数据。需要把 CPA 作为 OpenAI-compatible 代理资产下发时，另行配置专用的 `proxy_api_key`；该值不能复用管理密钥。
 

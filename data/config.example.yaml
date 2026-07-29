@@ -26,10 +26,11 @@ upstreams:
     name: New API Source
     type: newapi
     base_url: https://newapi-source.example.com
-    # Root/admin console access token, not a model API key.
-    access_token: REPLACE_WITH_NEW_API_SOURCE_ADMIN_ACCESS_TOKEN
+    # Ordinary-user dashboard PAT; SyncHub reads only this user's tokens.
+    access_token: REPLACE_WITH_NEW_API_SOURCE_USER_ACCESS_TOKEN
     # Numeric dashboard user ID for legacy sessions; omit when using a PAT.
     user_id: 1
+    discovery_mode: token
     sync_mappings: []
 
   - id: upstream-cpa-main

@@ -7,6 +7,7 @@ import type {
   Channel,
   DriftItem,
   MatrixData,
+  RuntimeInfo,
   SanitizedConfig,
   SyncTargetResult,
   TargetConfig,
@@ -18,6 +19,7 @@ type LoadState = 'idle' | 'loading' | 'ready' | 'error'
 
 export const useConsoleStore = defineStore('console', () => {
   const config = ref<SanitizedConfig | null>(null)
+  const runtimeInfo = ref<RuntimeInfo | null>(null)
   const matrix = ref<MatrixData | null>(null)
   const selectedUpstreamId = ref('')
   const selectedTargetId = ref('')
@@ -57,7 +59,9 @@ export const useConsoleStore = defineStore('console', () => {
     initialState.value = 'loading'
     initialError.value = ''
     try {
+      const healthRequest = api.getHealth().catch(() => null)
       config.value = await api.getConfig()
+      runtimeInfo.value = await healthRequest
       selectedTargetId.value = targets.value[0]?.id ?? ''
       const firstUpstream = upstreams.value[0]?.id ?? ''
       selectedUpstreamId.value = firstUpstream
@@ -269,6 +273,7 @@ export const useConsoleStore = defineStore('console', () => {
 
   return {
     config,
+    runtimeInfo,
     matrix,
     channels,
     activeView,
