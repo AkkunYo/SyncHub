@@ -190,10 +190,11 @@ type ChannelSnapshot struct {
 // created against, so a later ratio or model change on the upstream side is
 // reported as drift instead of silently changing cost.
 type UpstreamGroupSnapshot struct {
-	Group      string   `json:"group" yaml:"group"`
-	Ratio      float64  `json:"ratio" yaml:"ratio"`
-	RatioKnown bool     `json:"ratio_known" yaml:"ratio_known"`
-	Models     []string `json:"models" yaml:"models,omitempty"`
+	Group          string   `json:"group" yaml:"group"`
+	Ratio          float64  `json:"ratio" yaml:"ratio"`
+	RatioKnown     bool     `json:"ratio_known" yaml:"ratio_known"`
+	Models         []string `json:"models" yaml:"models,omitempty"`
+	ModelsVerified bool     `json:"models_verified" yaml:"models_verified"`
 }
 
 type SyncMapping struct {

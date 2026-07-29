@@ -291,6 +291,11 @@ func deepCopy(cfg Config) Config {
 		for j := range cfg.Upstreams[i].SyncMappings {
 			copyConfig.Upstreams[i].SyncMappings[j] = cfg.Upstreams[i].SyncMappings[j]
 			copyConfig.Upstreams[i].SyncMappings[j].Snapshot.Models = append([]string(nil), cfg.Upstreams[i].SyncMappings[j].Snapshot.Models...)
+			if source := cfg.Upstreams[i].SyncMappings[j].UpstreamGroup; source != nil {
+				group := *source
+				group.Models = append([]string(nil), source.Models...)
+				copyConfig.Upstreams[i].SyncMappings[j].UpstreamGroup = &group
+			}
 		}
 	}
 	return copyConfig

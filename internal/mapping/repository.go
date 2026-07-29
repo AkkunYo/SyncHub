@@ -266,5 +266,10 @@ func exactIdentity(mapping platform.SyncMapping) string {
 
 func cloneMapping(mapping platform.SyncMapping) platform.SyncMapping {
 	mapping.Snapshot.Models = append([]string(nil), mapping.Snapshot.Models...)
+	if source := mapping.UpstreamGroup; source != nil {
+		group := *source
+		group.Models = append([]string(nil), source.Models...)
+		mapping.UpstreamGroup = &group
+	}
 	return mapping
 }

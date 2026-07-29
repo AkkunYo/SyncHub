@@ -113,5 +113,10 @@ func compareSnapshot(snapshot platform.ChannelSnapshot, current platform.Channel
 
 func cloneMapping(mapping platform.SyncMapping) platform.SyncMapping {
 	mapping.Snapshot.Models = slices.Clone(mapping.Snapshot.Models)
+	if source := mapping.UpstreamGroup; source != nil {
+		group := *source
+		group.Models = slices.Clone(source.Models)
+		mapping.UpstreamGroup = &group
+	}
 	return mapping
 }

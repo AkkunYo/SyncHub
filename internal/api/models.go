@@ -269,6 +269,14 @@ func cloneMappingsForResponse(mappings []platform.SyncMapping) []platform.SyncMa
 		if result[i].Snapshot.Models == nil {
 			result[i].Snapshot.Models = []string{}
 		}
+		if source := mappings[i].UpstreamGroup; source != nil {
+			group := *source
+			group.Models = append([]string(nil), source.Models...)
+			if group.Models == nil {
+				group.Models = []string{}
+			}
+			result[i].UpstreamGroup = &group
+		}
 	}
 	return result
 }
