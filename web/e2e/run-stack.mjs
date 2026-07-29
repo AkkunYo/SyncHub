@@ -26,7 +26,6 @@ const targetUserIds = {
   'target-a': 9101,
   'target-b': 9102,
 }
-const sourceProof = 'E2E_SECURITY_PROOF_PLACEHOLDER'
 const sourceKey = 'E2E_UPSTREAM_KEY_PLACEHOLDER'
 
 const targets = {
@@ -111,26 +110,43 @@ const fixtureServer = createServer(async (request, response) => {
         json(response, 401, { success: false })
         return
       }
-      if (request.method === 'GET' && requestURL.pathname === '/source/api/channel/') {
-        channelList(response, [{
-          id: 7,
-          type: 1,
-          name: 'E2E upstream key',
-          status: 1,
-          base_url: 'https://provider.invalid',
-          models: 'gpt-4.1',
-          group: 'default',
-          priority: 0,
-          weight: 100,
-        }], requestURL)
+      if (request.method === 'GET' && requestURL.pathname === '/source/api/user/self') {
+        json(response, 200, { success: true, data: { role: 1, group: 'default' } })
         return
       }
-      if (request.method === 'POST' && requestURL.pathname === '/source/api/channel/7/key') {
-        if (request.headers['x-security-proof'] !== sourceProof) {
-          json(response, 403, { success: false })
+      if (request.method === 'GET' && requestURL.pathname === '/source/api/token/') {
+        const page = Number(requestURL.searchParams.get('p') ?? '1')
+        const items = page === 1 ? [{
+          id: 42,
+          name: 'E2E upstream key',
+          key: 'sk-e2e****fixture',
+          status: 1,
+          group: 'default',
+          remain_quota: 1000000,
+          used_quota: 0,
+          unlimited_quota: false,
+          expired_time: 4102444800,
+          model_limits_enabled: true,
+          model_limits: 'gpt-4.1',
+        }] : []
+        json(response, 200, { success: true, data: { page, page_size: 100, total: 1, items } })
+        return
+      }
+      if (request.method === 'GET' && requestURL.pathname === '/source/api/user/self/groups') {
+        json(response, 200, { success: true, data: { default: { ratio: 1, desc: 'Default' } } })
+        return
+      }
+      if (request.method === 'GET' && requestURL.pathname === '/source/api/user/models' && requestURL.searchParams.get('group') === 'default') {
+        json(response, 200, { success: true, data: ['gpt-4.1'] })
+        return
+      }
+      if (request.method === 'POST' && requestURL.pathname === '/source/api/token/batch/keys') {
+        const body = await readJSON(request)
+        if (!Array.isArray(body.ids) || body.ids.length !== 1 || body.ids[0] !== 42) {
+          json(response, 400, { success: false })
           return
         }
-        json(response, 200, { success: true, data: { key: sourceKey } })
+        json(response, 200, { success: true, data: { keys: { 42: sourceKey } } })
         return
       }
     }

@@ -201,23 +201,13 @@ describe('SyncHub console', () => {
         )
       }
       if (url.pathname === '/api/v1/sync' && init.method === 'POST') {
-        const body = JSON.parse(String(init.body)) as { asset_id: string }
         return envelope({
-          targets:
-            body.asset_id === assetOne.id
-              ? [
-                  { target_id: 'target-a', status: 'synced', channel_id: '42' },
-                  {
-                    target_id: 'target-b',
-                    status: 'incompatible',
-                    code: 'incompatible_target',
-                    retryable: false,
-                  },
-                ]
-              : [
-                  { target_id: 'target-a', status: 'needs_reconcile', code: 'needs_reconcile', retryable: true },
-                  { target_id: 'target-b', status: 'synced', channel_id: '93' },
-                ],
+          units: [
+            { unit_id: 'sync-1', asset_id: assetOne.id, target_id: 'target-a', status: 'synced', channel_id: '42', effective_models: ['gpt-4.1'], excluded_models: [], warnings: [] },
+            { unit_id: 'sync-2', asset_id: assetOne.id, target_id: 'target-b', status: 'incompatible', code: 'incompatible_target', retryable: false, effective_models: [], excluded_models: [], warnings: [] },
+            { unit_id: 'sync-3', asset_id: assetTwo.id, target_id: 'target-a', status: 'needs_reconcile', code: 'needs_reconcile', retryable: true, effective_models: [], excluded_models: [], warnings: [] },
+            { unit_id: 'sync-4', asset_id: assetTwo.id, target_id: 'target-b', status: 'synced', channel_id: '93', effective_models: ['claude-sonnet-4'], excluded_models: [], warnings: [] },
+          ],
         })
       }
       throw new Error(`Unexpected request: ${init.method ?? 'GET'} ${url.pathname}`)
@@ -244,12 +234,16 @@ describe('SyncHub console', () => {
     expect(proofInput).toHaveValue('')
 
     const syncCalls = fetchMock.mock.calls.filter(([input]) => String(input) === '/api/v1/sync')
-    expect(syncCalls).toHaveLength(2)
-    for (const [, options] of syncCalls) {
-      const body = JSON.parse(String(options?.body)) as Record<string, unknown>
-      expect(body).not.toHaveProperty('provider')
-      expect(body).not.toHaveProperty('base_url')
-    }
+    expect(syncCalls).toHaveLength(1)
+    const body = JSON.parse(String(syncCalls[0]?.[1]?.body)) as Record<string, unknown>
+    expect(body).not.toHaveProperty('provider')
+    expect(body).not.toHaveProperty('base_url')
+    expect(body).toMatchObject({ units: [
+      { unit_id: 'sync-1', asset_id: assetOne.id, target_id: 'target-a' },
+      { unit_id: 'sync-2', asset_id: assetOne.id, target_id: 'target-b' },
+      { unit_id: 'sync-3', asset_id: assetTwo.id, target_id: 'target-a' },
+      { unit_id: 'sync-4', asset_id: assetTwo.id, target_id: 'target-b' },
+    ] })
     expect(window.localStorage).toHaveLength(0)
     expect(window.sessionStorage).toHaveLength(0)
     expect(window.location.search).toBe('')
@@ -261,9 +255,9 @@ describe('SyncHub console', () => {
       if (url.pathname === '/api/v1/matrix') return envelope(matrix())
       if (url.pathname === '/api/v1/sync' && init.method === 'POST') {
         return envelope({
-          targets: [
-            { target_id: 'target-a', status: 'failed', code: 'target_create_failed', retryable: true },
-            { target_id: 'target-b', status: 'synced', channel_id: '94' },
+          units: [
+            { unit_id: 'sync-1', asset_id: assetOne.id, target_id: 'target-a', status: 'failed', code: 'target_create_failed', retryable: true, effective_models: [], excluded_models: [], warnings: [] },
+            { unit_id: 'sync-2', asset_id: assetOne.id, target_id: 'target-b', status: 'synced', channel_id: '94', effective_models: ['gpt-4.1'], excluded_models: [], warnings: [] },
           ],
         })
       }
@@ -337,7 +331,18 @@ describe('SyncHub console', () => {
         )
       }
       if (url.pathname === '/api/v1/sync' && init.method === 'POST') {
-        return envelope({ targets: [{ target_id: 'target-b', status: 'synced', channel_id: '94' }] })
+        return envelope({
+          units: [{
+            unit_id: 'sync-1',
+            asset_id: assetOne.id,
+            target_id: 'target-b',
+            status: 'synced',
+            channel_id: '94',
+            effective_models: ['gpt-4.1'],
+            excluded_models: [],
+            warnings: [],
+          }],
+        })
       }
       throw new Error(`Unexpected request: ${init.method ?? 'GET'} ${url.pathname}`)
     })
@@ -360,8 +365,13 @@ describe('SyncHub console', () => {
     expect(await within(dialog).findByText('同步完成')).toBeInTheDocument()
     const syncCall = fetchMock.mock.calls.find(([input]) => String(input) === '/api/v1/sync')
     expect(JSON.parse(String(syncCall?.[1]?.body))).toMatchObject({
-      asset_id: assetOne.id,
-      target_ids: ['target-b'],
+      upstream_id: 'source-a',
+      units: [{
+        unit_id: 'sync-1',
+        asset_id: assetOne.id,
+        target_id: 'target-b',
+        settings: { target_group: 'default' },
+      }],
     })
   })
 
@@ -1267,12 +1277,12 @@ describe('SyncHub console', () => {
       if (url.pathname === '/api/v1/sync' && init.method === 'POST') {
         syncAttempt += 1
         return envelope({
-          targets: syncAttempt === 1
+          units: syncAttempt === 1
             ? [
-                { target_id: 'target-a', status: 'synced', channel_id: '42' },
-                { target_id: 'target-b', status: 'failed', code: 'target_create_failed', retryable: true },
+                { unit_id: 'sync-1', asset_id: assetOne.id, target_id: 'target-a', status: 'synced', channel_id: '42', effective_models: ['gpt-4.1'], excluded_models: [], warnings: [] },
+                { unit_id: 'sync-2', asset_id: assetOne.id, target_id: 'target-b', status: 'failed', code: 'target_create_failed', retryable: true, effective_models: [], excluded_models: [], warnings: [] },
               ]
-            : [{ target_id: 'target-b', status: 'synced', channel_id: '99' }],
+            : [{ unit_id: 'sync-1', asset_id: assetOne.id, target_id: 'target-b', status: 'synced', channel_id: '99', effective_models: ['gpt-4.1'], excluded_models: [], warnings: [] }],
         })
       }
       throw new Error(`Unexpected request: ${init.method ?? 'GET'} ${url.pathname}`)
@@ -1303,7 +1313,7 @@ describe('SyncHub console', () => {
     expect(proof).toHaveValue('')
     const syncCalls = fetchMock.mock.calls.filter(([input]) => String(input) === '/api/v1/sync')
     expect(JSON.parse(String(syncCalls[1]?.[1]?.body))).toMatchObject({
-      target_ids: ['target-b'],
+      units: [{ asset_id: assetOne.id, target_id: 'target-b' }],
       grant: { security_proof: 'replacement-proof-placeholder' },
     })
     expect(window.localStorage).toHaveLength(0)

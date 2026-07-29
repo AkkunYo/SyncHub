@@ -73,7 +73,6 @@ test('administrator completes the live multi-target synchronization and reconcil
   await page.getByRole('checkbox', { name: '选择资产 E2E upstream key' }).check()
   await page.getByRole('button', { name: '批量同步 1 个资产' }).click()
   const syncDialog = page.getByRole('dialog', { name: '批量同步设置' })
-  await syncDialog.getByLabel('一次性安全证明').fill('E2E_SECURITY_PROOF_PLACEHOLDER')
   await syncDialog.getByRole('button', { name: '开始同步' }).click()
   await expect(syncDialog.getByRole('heading', { name: '同步完成' })).toBeVisible()
   await expect(syncDialog.getByText('#101')).toBeVisible()
