@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -53,18 +54,33 @@ type TargetConfig struct {
 }
 
 type UpstreamConfig struct {
-	ID            string        `json:"id" yaml:"id"`
-	Name          string        `json:"name" yaml:"name"`
-	Type          string        `json:"type" yaml:"type"`
-	BaseURL       string        `json:"base_url" yaml:"base_url"`
-	UserID        int           `json:"user_id,omitempty" yaml:"user_id,omitempty"`
-	AccessToken   string        `json:"-" yaml:"access_token,omitempty"`
-	APIKey        string        `json:"-" yaml:"api_key,omitempty"`
-	ManagementKey string        `json:"-" yaml:"management_key,omitempty"`
-	ProxyAPIKey   string        `json:"-" yaml:"proxy_api_key,omitempty"`
-	DiscoveryMode string        `json:"discovery_mode,omitempty" yaml:"discovery_mode,omitempty"`
-	ManageTokens  bool          `json:"manage_tokens,omitempty" yaml:"manage_tokens,omitempty"`
-	SyncMappings  []SyncMapping `json:"sync_mappings" yaml:"sync_mappings,omitempty"`
+	ID                    string               `json:"id" yaml:"id"`
+	Name                  string               `json:"name" yaml:"name"`
+	Type                  string               `json:"type" yaml:"type"`
+	BaseURL               string               `json:"base_url" yaml:"base_url"`
+	UserID                int                  `json:"user_id,omitempty" yaml:"user_id,omitempty"`
+	AccessToken           string               `json:"-" yaml:"access_token,omitempty"`
+	APIKey                string               `json:"-" yaml:"api_key,omitempty"`
+	ManagementKey         string               `json:"-" yaml:"management_key,omitempty"`
+	ProxyAPIKey           string               `json:"-" yaml:"proxy_api_key,omitempty"`
+	DiscoveryMode         string               `json:"discovery_mode,omitempty" yaml:"discovery_mode,omitempty"`
+	ManageTokens          bool                 `json:"manage_tokens,omitempty" yaml:"manage_tokens,omitempty"`
+	ManagedTokenNamespace string               `json:"managed_token_namespace,omitempty" yaml:"managed_token_namespace,omitempty"`
+	ManagedTokens         []ManagedTokenRecord `json:"-" yaml:"managed_tokens,omitempty"`
+	SyncMappings          []SyncMapping        `json:"sync_mappings" yaml:"sync_mappings,omitempty"`
+}
+
+type ManagedTokenRecord struct {
+	IdempotencyKey string   `json:"idempotency_key" yaml:"idempotency_key"`
+	Status         string   `json:"status" yaml:"status,omitempty"`
+	TokenID        int      `json:"token_id,omitempty" yaml:"token_id,omitempty"`
+	AssetID        string   `json:"asset_id,omitempty" yaml:"asset_id,omitempty"`
+	Name           string   `json:"name" yaml:"name"`
+	TargetID       string   `json:"target_id" yaml:"target_id"`
+	UpstreamGroup  string   `json:"upstream_group" yaml:"upstream_group"`
+	Quota          int64    `json:"quota" yaml:"quota"`
+	ExpiresAt      int64    `json:"expires_at" yaml:"expires_at"`
+	Models         []string `json:"models" yaml:"models"`
 }
 
 // New API discovery modes. Only newapi upstreams accept these values; the mode
@@ -73,7 +89,11 @@ const (
 	DiscoveryModeAuto    = "auto"
 	DiscoveryModeChannel = "channel"
 	DiscoveryModeToken   = "token"
+	ManagedTokenPending  = "pending"
+	ManagedTokenReady    = "ready"
 )
+
+var managedTokenNamespacePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 
 type SyncMapping = platform.SyncMapping
 
@@ -206,12 +226,22 @@ func Validate(cfg *Config) error {
 			if upstream.ManageTokens && upstream.DiscoveryMode == DiscoveryModeChannel {
 				return fmt.Errorf("upstream[%d].manage_tokens is not allowed in channel discovery mode", i)
 			}
+			upstream.ManagedTokenNamespace = strings.TrimSpace(upstream.ManagedTokenNamespace)
+			if upstream.ManagedTokenNamespace == "" {
+				upstream.ManagedTokenNamespace = "synchub"
+			}
+			if !managedTokenNamespacePattern.MatchString(upstream.ManagedTokenNamespace) {
+				return fmt.Errorf("upstream[%d].managed_token_namespace is invalid", i)
+			}
 		} else {
 			if upstream.DiscoveryMode != "" {
 				return fmt.Errorf("upstream[%d].discovery_mode is only supported for newapi", i)
 			}
 			if upstream.ManageTokens {
 				return fmt.Errorf("upstream[%d].manage_tokens is only supported for newapi", i)
+			}
+			if strings.TrimSpace(upstream.ManagedTokenNamespace) != "" || len(upstream.ManagedTokens) != 0 {
+				return fmt.Errorf("upstream[%d].managed_token_namespace and managed_tokens are only supported for newapi", i)
 			}
 		}
 		baseURL, err := normalizeBaseURL(upstream.BaseURL)
@@ -234,6 +264,10 @@ func Validate(cfg *Config) error {
 			}
 		}
 
+		if err := validateManagedTokens(i, upstream, targetIDs); err != nil {
+			return err
+		}
+
 		for mappingIndex := range upstream.SyncMappings {
 			mapping := &upstream.SyncMappings[mappingIndex]
 			migrateMapping(upstream.ID, mapping)
@@ -249,6 +283,79 @@ func Validate(cfg *Config) error {
 			if mapping.TargetChannelID == "" {
 				return fmt.Errorf("upstream[%d].sync_mappings[%d].target_channel_id is required", i, mappingIndex)
 			}
+		}
+	}
+	return nil
+}
+
+func validateManagedTokens(upstreamIndex int, upstream *UpstreamConfig, targetIDs map[string]struct{}) error {
+	keys := make(map[string]struct{}, len(upstream.ManagedTokens))
+	names := make(map[string]struct{}, len(upstream.ManagedTokens))
+	for index := range upstream.ManagedTokens {
+		record := &upstream.ManagedTokens[index]
+		record.IdempotencyKey = strings.TrimSpace(record.IdempotencyKey)
+		record.Status = strings.ToLower(strings.TrimSpace(record.Status))
+		record.AssetID = strings.TrimSpace(record.AssetID)
+		record.Name = strings.TrimSpace(record.Name)
+		record.TargetID = strings.TrimSpace(record.TargetID)
+		record.UpstreamGroup = strings.TrimSpace(record.UpstreamGroup)
+		prefix := fmt.Sprintf("upstream[%d].managed_tokens[%d]", upstreamIndex, index)
+		if record.IdempotencyKey == "" || len(record.IdempotencyKey) > 256 {
+			return fmt.Errorf("%s.idempotency_key is invalid", prefix)
+		}
+		if _, exists := keys[record.IdempotencyKey]; exists {
+			return fmt.Errorf("%s.idempotency_key is duplicated", prefix)
+		}
+		keys[record.IdempotencyKey] = struct{}{}
+		if record.Status == "" {
+			if record.TokenID > 0 {
+				record.Status = ManagedTokenReady
+			} else {
+				record.Status = ManagedTokenPending
+			}
+		}
+		if record.Name == "" || !strings.HasPrefix(record.Name, upstream.ManagedTokenNamespace+"-") {
+			return fmt.Errorf("%s.name is invalid", prefix)
+		}
+		if _, exists := names[record.Name]; exists {
+			return fmt.Errorf("%s.name is duplicated", prefix)
+		}
+		names[record.Name] = struct{}{}
+		if _, exists := targetIDs[record.TargetID]; !exists {
+			return fmt.Errorf("%s.target_id does not exist", prefix)
+		}
+		if record.UpstreamGroup == "" || record.Quota <= 0 || record.ExpiresAt <= 0 {
+			return fmt.Errorf("%s has invalid group, quota, or expiry", prefix)
+		}
+		models := make([]string, 0, len(record.Models))
+		seenModels := make(map[string]struct{}, len(record.Models))
+		for _, value := range record.Models {
+			model := strings.TrimSpace(value)
+			if model == "" {
+				return fmt.Errorf("%s.models is invalid", prefix)
+			}
+			if _, duplicate := seenModels[model]; duplicate {
+				return fmt.Errorf("%s.models is duplicated", prefix)
+			}
+			seenModels[model] = struct{}{}
+			models = append(models, model)
+		}
+		if len(models) == 0 {
+			return fmt.Errorf("%s.models is required", prefix)
+		}
+		record.Models = models
+		switch record.Status {
+		case ManagedTokenPending:
+			if record.TokenID != 0 || record.AssetID != "" {
+				return fmt.Errorf("%s pending record has a token identity", prefix)
+			}
+		case ManagedTokenReady:
+			expectedAssetID := fmt.Sprintf("%s:token:%d", upstream.ID, record.TokenID)
+			if record.TokenID <= 0 || record.AssetID != expectedAssetID {
+				return fmt.Errorf("%s ready record has an invalid token identity", prefix)
+			}
+		default:
+			return fmt.Errorf("%s.status is invalid", prefix)
 		}
 	}
 	return nil
@@ -287,6 +394,10 @@ func deepCopy(cfg Config) Config {
 	copyConfig.Upstreams = make([]UpstreamConfig, len(cfg.Upstreams))
 	for i := range cfg.Upstreams {
 		copyConfig.Upstreams[i] = cfg.Upstreams[i]
+		copyConfig.Upstreams[i].ManagedTokens = append([]ManagedTokenRecord(nil), cfg.Upstreams[i].ManagedTokens...)
+		for j := range copyConfig.Upstreams[i].ManagedTokens {
+			copyConfig.Upstreams[i].ManagedTokens[j].Models = append([]string(nil), cfg.Upstreams[i].ManagedTokens[j].Models...)
+		}
 		copyConfig.Upstreams[i].SyncMappings = make([]SyncMapping, len(cfg.Upstreams[i].SyncMappings))
 		for j := range cfg.Upstreams[i].SyncMappings {
 			copyConfig.Upstreams[i].SyncMappings[j] = cfg.Upstreams[i].SyncMappings[j]

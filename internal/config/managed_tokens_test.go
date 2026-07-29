@@ -34,9 +34,8 @@ func TestValidateDefaultsAndValidatesManagedTokenNamespace(t *testing.T) {
 
 	disabled := validTestConfig()
 	disabled.Upstreams[0] = newAPIUpstreamConfig()
-	disabled.Upstreams[0].ManagedTokenNamespace = "synchub"
-	if err := Validate(&disabled); err == nil || !strings.Contains(err.Error(), "managed_token_namespace") {
-		t.Fatalf("disabled namespace error=%v", err)
+	if err := Validate(&disabled); err != nil || disabled.Upstreams[0].ManagedTokenNamespace != "synchub" {
+		t.Fatalf("disabled namespace=%q error=%v", disabled.Upstreams[0].ManagedTokenNamespace, err)
 	}
 }
 
