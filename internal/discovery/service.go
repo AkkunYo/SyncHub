@@ -6,21 +6,25 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/AkkunYo/SyncHub/internal/platform"
 )
 
 var (
-	ErrCursorLoop    = errors.New("discovery cursor loop")
-	ErrAssetConflict = errors.New("discovery asset metadata conflict")
+	ErrCursorLoop              = errors.New("discovery cursor loop")
+	ErrAssetConflict           = errors.New("discovery asset metadata conflict")
+	ErrGroupCatalogUnsupported = errors.New("discovery group catalog unsupported")
+	ErrGroupCatalogInvalid     = errors.New("discovery group catalog invalid")
 )
 
 // Snapshot is a complete metadata-only view of the assets exposed by one
 // upstream source.
 type Snapshot struct {
-	SourceID string                   `json:"source_id"`
-	Assets   []platform.UpstreamAsset `json:"assets"`
+	SourceID     string                   `json:"source_id"`
+	Assets       []platform.UpstreamAsset `json:"assets"`
+	GroupCatalog *platform.GroupCatalog   `json:"group_catalog,omitempty"`
 }
 
 // Service keeps the latest successfully refreshed snapshot for each source.
@@ -37,6 +41,14 @@ func NewService() *Service {
 // entire traversal succeeds. It deliberately uses only ListAssets: resolving
 // secrets is outside metadata discovery's responsibility.
 func (s *Service) Refresh(ctx context.Context, sourceID string, adapter platform.UpstreamAdapter) (Snapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return Snapshot{}, err
+	}
+
+	capabilities, err := adapter.Capabilities(ctx)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("refresh capabilities for source %q: %w", sourceID, err)
+	}
 	if err := ctx.Err(); err != nil {
 		return Snapshot{}, err
 	}
@@ -82,6 +94,20 @@ func (s *Service) Refresh(ctx context.Context, sourceID string, adapter platform
 	}
 
 	refreshed := Snapshot{SourceID: sourceID, Assets: assets}
+	if capabilities.GroupCatalog {
+		provider, ok := adapter.(platform.GroupCatalogProvider)
+		if !ok {
+			return Snapshot{}, fmt.Errorf("%w for source %q", ErrGroupCatalogUnsupported, sourceID)
+		}
+		catalog, err := provider.GroupCatalog(ctx)
+		if err != nil {
+			return Snapshot{}, fmt.Errorf("refresh group catalog for source %q: %w", sourceID, err)
+		}
+		if strings.TrimSpace(catalog.SourceID) != sourceID {
+			return Snapshot{}, fmt.Errorf("%w for source %q", ErrGroupCatalogInvalid, sourceID)
+		}
+		refreshed.GroupCatalog = cloneGroupCatalog(&catalog)
+	}
 	if err := ctx.Err(); err != nil {
 		return Snapshot{}, err
 	}
@@ -114,13 +140,27 @@ func (s *Service) Snapshot(sourceID string) (Snapshot, bool) {
 
 func cloneSnapshot(snapshot Snapshot) Snapshot {
 	cloned := Snapshot{
-		SourceID: snapshot.SourceID,
-		Assets:   make([]platform.UpstreamAsset, len(snapshot.Assets)),
+		SourceID:     snapshot.SourceID,
+		Assets:       make([]platform.UpstreamAsset, len(snapshot.Assets)),
+		GroupCatalog: cloneGroupCatalog(snapshot.GroupCatalog),
 	}
 	for i, asset := range snapshot.Assets {
 		cloned.Assets[i] = cloneAsset(asset)
 	}
 	return cloned
+}
+
+func cloneGroupCatalog(source *platform.GroupCatalog) *platform.GroupCatalog {
+	if source == nil {
+		return nil
+	}
+	cloned := *source
+	cloned.Groups = make([]platform.UpstreamGroup, len(source.Groups))
+	for i, group := range source.Groups {
+		cloned.Groups[i] = group
+		cloned.Groups[i].Models = slices.Clone(group.Models)
+	}
+	return &cloned
 }
 
 func cloneAsset(asset platform.UpstreamAsset) platform.UpstreamAsset {

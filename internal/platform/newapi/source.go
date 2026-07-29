@@ -197,7 +197,7 @@ func (s *Source) Capabilities(ctx context.Context) (platform.SourceCapabilities,
 	}
 	switch mode {
 	case modeToken:
-		return platform.SourceCapabilities{AssetKinds: []platform.AssetKind{platform.AssetProxyKey}, SecretResolution: true}, nil
+		return platform.SourceCapabilities{AssetKinds: []platform.AssetKind{platform.AssetProxyKey}, SecretResolution: true, GroupCatalog: true}, nil
 	default:
 		return platform.SourceCapabilities{AssetKinds: []platform.AssetKind{platform.AssetStaticAPIKey}, SecretResolution: true}, nil
 	}

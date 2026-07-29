@@ -135,6 +135,19 @@ func TestSyncUnitsRejectsStructuralAndGroupCatalogErrorsBeforeSideEffects(t *tes
 			}
 		})
 	}
+
+	t.Run("more than one thousand units", func(t *testing.T) {
+		units := make([]string, 1001)
+		for i := range units {
+			units[i] = `{"unit_id":"u-1","asset_id":"source-a:channel:7:key:0","target_id":"target-a","settings":{"models":["gpt-4.1"],"target_group":"default","weight":100}}`
+		}
+		env := newTestEnvironment()
+		body := `{"upstream_id":"source-a","units":[` + strings.Join(units, ",") + `]}`
+		recorder, envelope := request(t, env.router(t), http.MethodPost, "/api/v1/sync", body, "application/json")
+		if recorder.Code != http.StatusBadRequest || errorCode(t, envelope) != "invalid_request" || env.syncer.calls != 0 {
+			t.Fatalf("status=%d calls=%d body=%s", recorder.Code, env.syncer.calls, recorder.Body.String())
+		}
+	})
 }
 
 func TestSyncUnitsReportsGroupRequiredUnknownAndMismatchByContract(t *testing.T) {

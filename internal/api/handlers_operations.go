@@ -226,6 +226,36 @@ func (s *server) listAssets(c *gin.Context) {
 	writeSuccess(c, http.StatusOK, snapshotData(snapshot, refreshed))
 }
 
+func (s *server) listGroups(c *gin.Context) {
+	upstreamID := c.Param("upstream_id")
+	if validateNoQuery(c) != nil || requireEmptyBody(c) != nil || validateIdentifier(upstreamID) != nil {
+		writeFailure(c, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	if _, ok := upstreamByID(s.deps.Config.Snapshot(), upstreamID); !ok {
+		writeFailure(c, http.StatusNotFound, "upstream_not_found")
+		return
+	}
+	snapshot, refreshed := s.deps.Discovery.Snapshot(upstreamID)
+	groups := make([]upstreamGroupResponse, 0)
+	if refreshed && snapshot.GroupCatalog != nil {
+		groups = make([]upstreamGroupResponse, len(snapshot.GroupCatalog.Groups))
+		for i, group := range snapshot.GroupCatalog.Groups {
+			var ratio *float64
+			if group.RatioKnown {
+				value := group.Ratio
+				ratio = &value
+			}
+			models := append([]string{}, group.Models...)
+			groups[i] = upstreamGroupResponse{
+				Name: group.Name, Description: group.Description, Ratio: ratio, RatioKnown: group.RatioKnown,
+				Models: models, ModelCount: len(models), ModelsVerified: group.ModelsVerified, Auto: group.Auto,
+			}
+		}
+	}
+	writeSuccess(c, http.StatusOK, gin.H{"upstream_id": upstreamID, "refreshed": refreshed, "groups": groups})
+}
+
 func snapshotData(snapshot discovery.Snapshot, refreshed bool) gin.H {
 	assets := snapshot.Assets
 	if assets == nil {
@@ -240,21 +270,43 @@ func (s *server) batchSync(c *gin.Context) {
 		return
 	}
 	request, err := decodeStrictJSON[syncRequest](c)
-	if err != nil || validateIdentifier(request.UpstreamID) != nil || validateIdentifier(request.AssetID) != nil {
-		writeFailure(c, http.StatusBadRequest, "invalid_request")
-		return
-	}
-	models, err := normalizeModels(request.Settings.Models)
-	if err != nil || validateText(strings.TrimSpace(request.Settings.Group), 128, false) != nil ||
-		validatePriorityAndWeight(request.Settings.Priority, request.Settings.Weight) != nil ||
+	if err != nil || validateIdentifier(request.UpstreamID) != nil || len(request.Units) == 0 || len(request.Units) > 1000 ||
 		validateText(request.Grant.SecurityProof, 4096, true) != nil {
 		writeFailure(c, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	targetIDs, err := normalizeTargetIDs(request.TargetIDs)
-	if err != nil {
-		writeFailure(c, http.StatusBadRequest, "invalid_request")
-		return
+	normalized := make([]syncUnitRequest, len(request.Units))
+	unitIDs := make(map[string]struct{}, len(request.Units))
+	tuples := make(map[runtimeKey]struct{}, len(request.Units))
+	keys := make([]runtimeKey, len(request.Units))
+	for i, unit := range request.Units {
+		unit.UnitID = strings.TrimSpace(unit.UnitID)
+		unit.AssetID = strings.TrimSpace(unit.AssetID)
+		unit.TargetID = strings.TrimSpace(unit.TargetID)
+		unit.UpstreamGroup = strings.TrimSpace(unit.UpstreamGroup)
+		unit.Settings.TargetGroup = strings.TrimSpace(unit.Settings.TargetGroup)
+		models, modelsErr := normalizeModels(unit.Settings.Models)
+		if validateIdentifier(unit.UnitID) != nil || validateIdentifier(unit.AssetID) != nil || validateIdentifier(unit.TargetID) != nil ||
+			modelsErr != nil || validateText(unit.Settings.TargetGroup, 128, false) != nil ||
+			validatePriorityAndWeight(unit.Settings.Priority, unit.Settings.Weight) != nil ||
+			(unit.UpstreamGroup != "" && validateText(unit.UpstreamGroup, 128, false) != nil) {
+			writeFailure(c, http.StatusBadRequest, "invalid_request")
+			return
+		}
+		if _, exists := unitIDs[unit.UnitID]; exists {
+			writeFailure(c, http.StatusBadRequest, "invalid_request")
+			return
+		}
+		unitIDs[unit.UnitID] = struct{}{}
+		key := runtimeKey{assetID: unit.AssetID, targetID: unit.TargetID}
+		if _, exists := tuples[key]; exists {
+			writeFailure(c, http.StatusBadRequest, "invalid_request")
+			return
+		}
+		tuples[key] = struct{}{}
+		keys[i] = key
+		unit.Settings.Models = models
+		normalized[i] = unit
 	}
 	cfg := s.deps.Config.Snapshot()
 	upstreamConfig, ok := upstreamByID(cfg, request.UpstreamID)
@@ -267,19 +319,37 @@ func (s *server) batchSync(c *gin.Context) {
 		writeFailure(c, http.StatusNotFound, "asset_not_found")
 		return
 	}
-	asset, ok := assetByID(snapshot, request.AssetID)
-	if !ok {
-		writeFailure(c, http.StatusNotFound, "asset_not_found")
-		return
-	}
-	source, err := s.deps.Adapters.ResolveUpstream(c.Request.Context(), upstreamConfig)
-	if err != nil {
-		respondDependencyError(c, err, internalError)
-		return
-	}
-	keys := make([]runtimeKey, len(targetIDs))
-	for i, targetID := range targetIDs {
-		keys[i] = runtimeKey{assetID: request.AssetID, targetID: targetID}
+	assets := make([]platform.UpstreamAsset, len(normalized))
+	targetConfigs := make([]config.TargetConfig, len(normalized))
+	groups := make([]*platform.UpstreamGroup, len(normalized))
+	for i, unit := range normalized {
+		asset, exists := assetByID(snapshot, unit.AssetID)
+		if !exists {
+			writeFailure(c, http.StatusNotFound, "asset_not_found")
+			return
+		}
+		targetConfig, exists := targetByID(cfg, unit.TargetID)
+		if !exists {
+			writeFailure(c, http.StatusNotFound, "target_not_found")
+			return
+		}
+		if asset.RawType == "newapi-token" {
+			if unit.UpstreamGroup == "" {
+				writeFailure(c, http.StatusBadRequest, "group_required")
+				return
+			}
+			group, exists := upstreamGroupByName(snapshot.GroupCatalog, unit.UpstreamGroup)
+			if !exists {
+				writeFailure(c, http.StatusBadRequest, "group_unknown")
+				return
+			}
+			groups[i] = &group
+		} else if unit.UpstreamGroup != "" {
+			writeFailure(c, http.StatusBadRequest, "invalid_request")
+			return
+		}
+		assets[i] = asset
+		targetConfigs[i] = targetConfig
 	}
 	sort.Slice(keys, func(i, j int) bool {
 		if keys[i].assetID == keys[j].assetID {
@@ -290,62 +360,81 @@ func (s *server) batchSync(c *gin.Context) {
 	unlock := s.lockTuples(keys)
 	defer unlock()
 
-	targetRequests := make([]syncservice.TargetRequest, 0, len(targetIDs))
-	targetAdapters := make(map[string]platform.TargetAdapter, len(targetIDs))
-	resolutionFailures := make([]syncservice.TargetResult, 0)
-	pendingResults := make([]syncservice.TargetResult, 0)
-	for _, targetID := range targetIDs {
-		targetConfig, exists := targetByID(cfg, targetID)
-		if !exists {
-			writeFailure(c, http.StatusNotFound, "target_not_found")
-			return
-		}
-		key := runtimeKey{assetID: request.AssetID, targetID: targetID}
+	source, err := s.deps.Adapters.ResolveUpstream(c.Request.Context(), upstreamConfig)
+	if err != nil {
+		respondDependencyError(c, err, internalError)
+		return
+	}
+	result := syncservice.MultiResult{Units: make([]syncservice.UnitResult, len(normalized))}
+	active := make([]syncservice.UnitRequest, 0, len(normalized))
+	activeIndexes := make([]int, 0, len(normalized))
+	targetAdapters := make(map[runtimeKey]platform.TargetAdapter, len(normalized))
+	type resolvedTarget struct {
+		adapter      platform.TargetAdapter
+		capabilities platform.TargetCapabilities
+		err          error
+	}
+	targets := make(map[string]resolvedTarget)
+	for i, unit := range normalized {
+		result.Units[i] = emptyUnitResult(unit)
+		key := runtimeKey{assetID: unit.AssetID, targetID: unit.TargetID}
 		if pending, exists := s.pendingState(key); exists {
-			pendingResults = append(pendingResults, syncservice.TargetResult{
-				TargetID: targetID, Status: syncservice.TargetNeedsReconcile,
-				Code: "needs_reconcile", ChannelID: pending.channelID, Retryable: true,
-			})
+			result.Units[i].Status = syncservice.TargetNeedsReconcile
+			result.Units[i].Code = "needs_reconcile"
+			result.Units[i].ChannelID = pending.channelID
+			result.Units[i].Retryable = true
 			continue
 		}
-		adapter, capabilities, resolveErr := s.deps.Adapters.ResolveTarget(c.Request.Context(), targetConfig)
-		if resolveErr != nil || isNilDependency(adapter) {
-			resolutionFailures = append(resolutionFailures, targetResolutionFailure(targetID, resolveErr))
+		resolved, exists := targets[unit.TargetID]
+		if !exists {
+			resolved.adapter, resolved.capabilities, resolved.err = s.deps.Adapters.ResolveTarget(c.Request.Context(), targetConfigs[i])
+			if resolved.err == nil && isNilDependency(resolved.adapter) {
+				resolved.err = ErrUpstreamFailure
+			}
+			targets[unit.TargetID] = resolved
+		}
+		if resolved.err != nil {
+			failure := targetResolutionFailure(unit.TargetID, resolved.err)
+			result.Units[i].Status = failure.Status
+			result.Units[i].Code = failure.Code
+			result.Units[i].Retryable = failure.Retryable
 			continue
 		}
-		targetAdapters[targetID] = adapter
-		targetRequests = append(targetRequests, syncservice.TargetRequest{ID: targetID, Adapter: adapter, Capabilities: capabilities})
+		targetAdapters[key] = resolved.adapter
+		active = append(active, syncservice.UnitRequest{
+			UnitID: unit.UnitID, Asset: assets[i],
+			Target:        syncservice.TargetRequest{ID: unit.TargetID, Adapter: resolved.adapter, Capabilities: resolved.capabilities},
+			UpstreamGroup: groups[i],
+			Settings:      platform.ChannelSettings{Models: unit.Settings.Models, Group: unit.Settings.TargetGroup, Priority: unit.Settings.Priority, Weight: unit.Settings.Weight},
+		})
+		activeIndexes = append(activeIndexes, i)
 	}
 
 	grant := platform.SecretGrant{SecurityProof: request.Grant.SecurityProof, AllowAuthFile: request.Grant.AllowAuthFile}
 	request.Grant.SecurityProof = ""
-	batch := syncservice.BatchRequest{
-		Asset: asset, Source: source, Grant: grant,
-		Settings: platform.ChannelSettings{Models: models, Group: strings.TrimSpace(request.Settings.Group), Priority: request.Settings.Priority, Weight: request.Settings.Weight},
-		Targets:  targetRequests,
+	if len(active) != 0 {
+		activeResult, _ := s.deps.Sync.SyncUnits(c.Request.Context(), request.UpstreamID, cfg.App.SyncConcurrency, syncservice.MultiRequest{
+			Source: source, Grant: grant, Units: active,
+		})
+		for i, resultIndex := range activeIndexes {
+			if i < len(activeResult.Units) {
+				result.Units[resultIndex] = normalizeUnitResult(normalized[resultIndex], activeResult.Units[i])
+			} else {
+				result.Units[resultIndex].Status = syncservice.TargetFailed
+				result.Units[resultIndex].Code = "upstream_failure"
+				result.Units[resultIndex].Retryable = true
+			}
+		}
 	}
-	result := syncservice.BatchResult{}
-	var syncErr error
-	if len(targetRequests) != 0 {
-		result, syncErr = s.deps.Sync.Sync(c.Request.Context(), request.UpstreamID, cfg.App.SyncConcurrency, batch)
-	}
-	batch.Grant.SecurityProof = ""
 	grant.SecurityProof = ""
-	if len(result.Targets) == 0 && len(resolutionFailures) == 0 && len(pendingResults) == 0 && syncErr != nil {
-		respondDependencyError(c, syncErr, upstreamFailure)
-		return
-	}
-	result.Targets = append(result.Targets, resolutionFailures...)
-	result.Targets = append(result.Targets, pendingResults...)
-	result = normalizeBatchResult(targetIDs, result)
-	for _, targetResult := range result.Targets {
-		key := runtimeKey{assetID: request.AssetID, targetID: targetResult.TargetID}
-		if targetResult.Status == syncservice.TargetNeedsReconcile {
-			s.markNeedsReconcile(key, targetResult.ChannelID)
-			if target := targetAdapters[targetResult.TargetID]; target != nil {
+	for _, unitResult := range result.Units {
+		key := runtimeKey{assetID: unitResult.AssetID, targetID: unitResult.TargetID}
+		if unitResult.Status == syncservice.TargetNeedsReconcile {
+			s.markNeedsReconcile(key, unitResult.ChannelID)
+			if target := targetAdapters[key]; target != nil {
 				_, _ = target.ListChannels(c.Request.Context())
 			}
-		} else if targetResult.Status == syncservice.TargetSynced {
+		} else if unitResult.Status == syncservice.TargetSynced {
 			s.clearRuntimeState(key)
 		}
 	}
@@ -540,6 +629,43 @@ func assetByID(snapshot discovery.Snapshot, assetID string) (platform.UpstreamAs
 		}
 	}
 	return platform.UpstreamAsset{}, false
+}
+
+func upstreamGroupByName(catalog *platform.GroupCatalog, name string) (platform.UpstreamGroup, bool) {
+	if catalog == nil {
+		return platform.UpstreamGroup{}, false
+	}
+	for _, group := range catalog.Groups {
+		if group.Name == name {
+			group.Models = append([]string(nil), group.Models...)
+			return group, true
+		}
+	}
+	return platform.UpstreamGroup{}, false
+}
+
+func emptyUnitResult(unit syncUnitRequest) syncservice.UnitResult {
+	return syncservice.UnitResult{
+		UnitID: unit.UnitID, AssetID: unit.AssetID, TargetID: unit.TargetID, UpstreamGroup: unit.UpstreamGroup,
+		EffectiveModels: []string{}, ExcludedModels: []string{}, Warnings: []string{},
+	}
+}
+
+func normalizeUnitResult(request syncUnitRequest, result syncservice.UnitResult) syncservice.UnitResult {
+	result.UnitID = request.UnitID
+	result.AssetID = request.AssetID
+	result.TargetID = request.TargetID
+	result.UpstreamGroup = request.UpstreamGroup
+	if result.EffectiveModels == nil {
+		result.EffectiveModels = []string{}
+	}
+	if result.ExcludedModels == nil {
+		result.ExcludedModels = []string{}
+	}
+	if result.Warnings == nil {
+		result.Warnings = []string{}
+	}
+	return result
 }
 
 func normalizeTargetIDs(targetIDs []string) ([]string, error) {

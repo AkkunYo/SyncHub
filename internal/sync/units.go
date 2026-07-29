@@ -323,7 +323,7 @@ func resolveUnitSecrets(
 	secrets := make(map[string]platform.ResolvedSecret, len(assetOrder))
 	resolvedValues := make([]platform.ResolvedSecret, 0, len(assetOrder))
 
-	if batch, ok := source.(platform.BatchSecretResolver); ok && !isNilDependency(batch) {
+	if batch, ok := source.(platform.BatchSecretResolver); ok && !isNilDependency(batch) && usesBatchSecretResolution(jobs) {
 		maxSize := batch.MaxSecretBatchSize()
 		if maxSize <= 0 {
 			markAssetsFailed(assetOrder, jobs, result, "secret_resolve_failed", true, 0)
@@ -386,6 +386,18 @@ func resolveUnitSecrets(
 		secrets[id] = value
 	}
 	return secrets, resolvedValues, nil
+}
+
+func usesBatchSecretResolution(jobs []unitJob) bool {
+	if len(jobs) == 0 {
+		return false
+	}
+	for _, job := range jobs {
+		if job.asset.RawType != "newapi-token" {
+			return false
+		}
+	}
+	return true
 }
 
 func markAssetsFailed(assetIDs []string, jobs []unitJob, result *MultiResult, code string, retryable bool, retryAfter int64) {

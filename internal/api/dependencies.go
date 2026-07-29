@@ -47,7 +47,7 @@ type DiscoveryService interface {
 // SyncService is a thin assembly boundary. T10 can create a sync.Service with
 // mapping.Repository.ForSource(sourceID) and the current concurrency setting.
 type SyncService interface {
-	Sync(ctx context.Context, sourceID string, concurrency int, request syncservice.BatchRequest) (syncservice.BatchResult, error)
+	SyncUnits(ctx context.Context, sourceID string, concurrency int, request syncservice.MultiRequest) (syncservice.MultiResult, error)
 }
 
 type MappingRepository interface {

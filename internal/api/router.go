@@ -107,6 +107,7 @@ func NewRouterWithRuntime(deps Dependencies, runtimeState *Runtime) (*gin.Engine
 
 		v1.POST("/upstreams/:upstream_id/refresh", s.refreshUpstream)
 		v1.GET("/upstreams/:upstream_id/assets", s.listAssets)
+		v1.GET("/upstreams/:upstream_id/groups", s.listGroups)
 		v1.GET("/matrix", s.matrix)
 		v1.POST("/sync", s.batchSync)
 

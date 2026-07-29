@@ -76,6 +76,7 @@ type UpstreamAsset struct {
 type SourceCapabilities struct {
 	AssetKinds       []AssetKind `json:"asset_kinds"`
 	SecretResolution bool        `json:"secret_resolution"`
+	GroupCatalog     bool        `json:"group_catalog"`
 }
 
 // UpstreamGroup describes one scheduling group an upstream exposes. Ratio and

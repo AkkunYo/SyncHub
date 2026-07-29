@@ -41,4 +41,26 @@ func (s *SyncService) Sync(
 	return service.Sync(ctx, request)
 }
 
+func (s *SyncService) SyncUnits(
+	ctx context.Context,
+	sourceID string,
+	concurrency int,
+	request syncservice.MultiRequest,
+) (syncservice.MultiResult, error) {
+	if ctx == nil {
+		return syncservice.MultiResult{}, ErrContextRequired
+	}
+	if s == nil || s.repository == nil {
+		return syncservice.MultiResult{}, ErrDependenciesIncomplete
+	}
+	if strings.TrimSpace(sourceID) == "" {
+		return syncservice.MultiResult{}, syncservice.ErrInvalidRequest
+	}
+	service := syncservice.NewService(
+		s.repository.ForSource(sourceID),
+		syncservice.Options{Concurrency: concurrency},
+	)
+	return service.SyncUnits(ctx, request)
+}
+
 var _ api.SyncService = (*SyncService)(nil)

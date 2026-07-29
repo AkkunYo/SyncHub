@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -368,8 +369,9 @@ func newTestEnvironment() *testEnvironment {
 		},
 		discovery: disc,
 		fakeDisc:  disc,
-		syncer: &fakeSyncService{result: syncservice.BatchResult{Targets: []syncservice.TargetResult{{
-			TargetID: "target-a", Status: syncservice.TargetSynced, ChannelID: "42",
+		syncer: &fakeSyncService{multiResult: syncservice.MultiResult{Units: []syncservice.UnitResult{{
+			UnitID: "u-1", AssetID: asset.ID, TargetID: "target-a", Status: syncservice.TargetSynced, ChannelID: "42",
+			EffectiveModels: []string{"gpt-4.1"}, ExcludedModels: []string{}, Warnings: []string{},
 		}}}},
 		mappings:   &fakeMappings{byTarget: map[string][]platform.SyncMapping{}},
 		reconciler: &fakeReconcile{},
@@ -434,6 +436,11 @@ func errorCode(t *testing.T, envelope map[string]any) string {
 	}
 	code, _ := errorObject["code"].(string)
 	return code
+}
+
+func staticSyncBody(unitID, upstreamID, assetID, targetID string, weight int) string {
+	return fmt.Sprintf(`{"upstream_id":%q,"units":[{"unit_id":%q,"asset_id":%q,"target_id":%q,"settings":{"models":["gpt-4.1"],"target_group":"default","priority":0,"weight":%d}}]}`,
+		upstreamID, unitID, assetID, targetID, weight)
 }
 
 func TestHealthEnvelopeAndRequestID(t *testing.T) {
@@ -816,7 +823,7 @@ func TestAssetsWithoutSnapshotAndQueryValidation(t *testing.T) {
 	}
 }
 
-func TestBatchSyncDeduplicatesTargetsAndKeepsGrantRequestScoped(t *testing.T) {
+func TestBatchSyncKeepsUnitsAndGrantRequestScoped(t *testing.T) {
 	env := newTestEnvironment()
 	targetB := &fakeTarget{}
 	env.store.cfg.Targets = append(env.store.cfg.Targets, config.TargetConfig{
@@ -828,13 +835,13 @@ func TestBatchSyncDeduplicatesTargetsAndKeepsGrantRequestScoped(t *testing.T) {
 			platform.ProviderOpenAI: {Modes: []platform.SyncMode{platform.SyncModeStaticKey}},
 		}},
 	}
-	env.syncer.result = syncservice.BatchResult{Targets: []syncservice.TargetResult{
-		{TargetID: "target-a", Status: syncservice.TargetSynced, ChannelID: "42"},
-		{TargetID: "target-b", Status: syncservice.TargetIncompatible, Code: "incompatible_target"},
+	env.syncer.multiResult = syncservice.MultiResult{Units: []syncservice.UnitResult{
+		{UnitID: "u-a", AssetID: "source-a:channel:7:key:0", TargetID: "target-a", Status: syncservice.TargetSynced, ChannelID: "42", EffectiveModels: []string{"gpt-4.1"}, ExcludedModels: []string{}, Warnings: []string{}},
+		{UnitID: "u-b", AssetID: "source-a:channel:7:key:0", TargetID: "target-b", Status: syncservice.TargetIncompatible, Code: "incompatible_target", EffectiveModels: []string{}, ExcludedModels: []string{}, Warnings: []string{}},
 	}}
 	router := env.router(t)
 	proof := "proof-request-only"
-	body := `{"upstream_id":"source-a","asset_id":"source-a:channel:7:key:0","target_ids":["target-a","target-b","target-a"],"settings":{"models":["gpt-4.1"],"group":"default","priority":0,"weight":100},"grant":{"security_proof":"` + proof + `","allow_auth_file":false}}`
+	body := `{"upstream_id":"source-a","units":[{"unit_id":"u-a","asset_id":"source-a:channel:7:key:0","target_id":"target-a","settings":{"models":["gpt-4.1"],"target_group":"default","priority":0,"weight":100}},{"unit_id":"u-b","asset_id":"source-a:channel:7:key:0","target_id":"target-b","settings":{"models":["gpt-4.1"],"target_group":"default","priority":0,"weight":100}}],"grant":{"security_proof":"` + proof + `","allow_auth_file":false}}`
 	recorder, envelope := request(t, router, http.MethodPost, "/api/v1/sync", body, "application/json")
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
@@ -845,13 +852,13 @@ func TestBatchSyncDeduplicatesTargetsAndKeepsGrantRequestScoped(t *testing.T) {
 	if env.syncer.calls != 1 || env.syncer.sourceID != "source-a" || env.syncer.concurrency != 4 {
 		t.Fatalf("sync call = %#v", env.syncer)
 	}
-	if len(env.syncer.request.Targets) != 2 || env.syncer.request.Targets[0].ID != "target-a" || env.syncer.request.Targets[1].ID != "target-b" {
-		t.Fatalf("targets = %#v", env.syncer.request.Targets)
+	if len(env.syncer.multiRequest.Units) != 2 || env.syncer.multiRequest.Units[0].Target.ID != "target-a" || env.syncer.multiRequest.Units[1].Target.ID != "target-b" {
+		t.Fatalf("units = %#v", env.syncer.multiRequest.Units)
 	}
-	if env.syncer.request.Grant.SecurityProof != proof || env.syncer.request.Grant.AllowAuthFile {
-		t.Fatalf("grant = %#v", env.syncer.request.Grant)
+	if env.syncer.multiRequest.Grant.SecurityProof != proof || env.syncer.multiRequest.Grant.AllowAuthFile {
+		t.Fatalf("grant = %#v", env.syncer.multiRequest.Grant)
 	}
-	results := dataObject(t, envelope)["targets"].([]any)
+	results := dataObject(t, envelope)["units"].([]any)
 	if len(results) != 2 || results[0].(map[string]any)["status"] != "synced" || results[1].(map[string]any)["status"] != "incompatible" {
 		t.Fatalf("results = %#v", results)
 	}
@@ -859,11 +866,12 @@ func TestBatchSyncDeduplicatesTargetsAndKeepsGrantRequestScoped(t *testing.T) {
 
 func TestBatchSyncValidRequestReturnsPartialResultsDespiteServiceError(t *testing.T) {
 	env := newTestEnvironment()
-	env.syncer.result = syncservice.BatchResult{Targets: []syncservice.TargetResult{{
-		TargetID: "target-a", Status: syncservice.TargetNeedsReconcile, Code: "mapping_persist_failed", ChannelID: "42", Retryable: true,
+	env.syncer.multiResult = syncservice.MultiResult{Units: []syncservice.UnitResult{{
+		UnitID: "u-1", AssetID: "source-a:channel:7:key:0", TargetID: "target-a", Status: syncservice.TargetNeedsReconcile,
+		Code: "mapping_persist_failed", ChannelID: "42", Retryable: true, EffectiveModels: []string{}, ExcludedModels: []string{}, Warnings: []string{},
 	}}}
 	env.syncer.err = errors.New("upstream response " + testSecret)
-	body := `{"upstream_id":"source-a","asset_id":"source-a:channel:7:key:0","target_ids":["target-a"],"settings":{"models":["gpt-4.1"],"group":"default","priority":0,"weight":100},"grant":{"security_proof":"proof"}}`
+	body := `{"upstream_id":"source-a","units":[{"unit_id":"u-1","asset_id":"source-a:channel:7:key:0","target_id":"target-a","settings":{"models":["gpt-4.1"],"target_group":"default","priority":0,"weight":100}}],"grant":{"security_proof":"proof"}}`
 	recorder, envelope := request(t, env.router(t), http.MethodPost, "/api/v1/sync", body, "application/json")
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
@@ -871,8 +879,8 @@ func TestBatchSyncValidRequestReturnsPartialResultsDespiteServiceError(t *testin
 	if strings.Contains(recorder.Body.String(), testSecret) {
 		t.Fatalf("response leaked service error: %s", recorder.Body.String())
 	}
-	result := dataObject(t, envelope)["targets"].([]any)[0].(map[string]any)
-	if result["status"] != "needs_reconcile" || result["code"] != "needs_reconcile" || result["retryable"] != true {
+	result := dataObject(t, envelope)["units"].([]any)[0].(map[string]any)
+	if result["status"] != "needs_reconcile" || result["code"] != "mapping_persist_failed" || result["retryable"] != true {
 		t.Fatalf("result = %#v", result)
 	}
 }
@@ -884,12 +892,12 @@ func TestBatchSyncRequestErrors(t *testing.T) {
 		status int
 		code   string
 	}{
-		{name: "asset missing", body: `{"upstream_id":"source-a","asset_id":"missing","target_ids":["target-a"],"settings":{"models":["gpt-4.1"],"group":"default","priority":0,"weight":100}}`, status: 404, code: "asset_not_found"},
-		{name: "target missing", body: `{"upstream_id":"source-a","asset_id":"source-a:channel:7:key:0","target_ids":["missing"],"settings":{"models":["gpt-4.1"],"group":"default","priority":0,"weight":100}}`, status: 404, code: "target_not_found"},
-		{name: "upstream missing", body: `{"upstream_id":"missing","asset_id":"source-a:channel:7:key:0","target_ids":["target-a"],"settings":{"models":["gpt-4.1"],"group":"default","priority":0,"weight":100}}`, status: 404, code: "upstream_not_found"},
-		{name: "empty targets", body: `{"upstream_id":"source-a","asset_id":"source-a:channel:7:key:0","target_ids":[],"settings":{"models":["gpt-4.1"],"group":"default","priority":0,"weight":100}}`, status: 400, code: "invalid_request"},
-		{name: "duplicate models", body: `{"upstream_id":"source-a","asset_id":"source-a:channel:7:key:0","target_ids":["target-a"],"settings":{"models":["gpt-4.1","gpt-4.1"],"group":"default","priority":0,"weight":100}}`, status: 400, code: "invalid_request"},
-		{name: "negative weight", body: `{"upstream_id":"source-a","asset_id":"source-a:channel:7:key:0","target_ids":["target-a"],"settings":{"models":["gpt-4.1"],"group":"default","priority":0,"weight":-1}}`, status: 400, code: "invalid_request"},
+		{name: "asset missing", body: staticSyncBody("u-1", "source-a", "missing", "target-a", 100), status: 404, code: "asset_not_found"},
+		{name: "target missing", body: staticSyncBody("u-1", "source-a", "source-a:channel:7:key:0", "missing", 100), status: 404, code: "target_not_found"},
+		{name: "upstream missing", body: staticSyncBody("u-1", "missing", "source-a:channel:7:key:0", "target-a", 100), status: 404, code: "upstream_not_found"},
+		{name: "empty units", body: `{"upstream_id":"source-a","units":[]}`, status: 400, code: "invalid_request"},
+		{name: "duplicate models", body: `{"upstream_id":"source-a","units":[{"unit_id":"u-1","asset_id":"source-a:channel:7:key:0","target_id":"target-a","settings":{"models":["gpt-4.1","gpt-4.1"],"target_group":"default","priority":0,"weight":100}}]}`, status: 400, code: "invalid_request"},
+		{name: "negative weight", body: staticSyncBody("u-1", "source-a", "source-a:channel:7:key:0", "target-a", -1), status: 400, code: "invalid_request"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -908,7 +916,7 @@ func TestConcurrentSyncForSameTupleIsSerialized(t *testing.T) {
 	var calls atomic.Int32
 	var active atomic.Int32
 	var maximum atomic.Int32
-	env.syncer.fn = func(_ context.Context, _ string, _ int, request syncservice.BatchRequest) (syncservice.BatchResult, error) {
+	env.syncer.multiFn = func(_ context.Context, _ string, _ int, request syncservice.MultiRequest) (syncservice.MultiResult, error) {
 		calls.Add(1)
 		current := active.Add(1)
 		for {
@@ -920,10 +928,11 @@ func TestConcurrentSyncForSameTupleIsSerialized(t *testing.T) {
 		entered <- struct{}{}
 		<-release
 		active.Add(-1)
-		return syncservice.BatchResult{Targets: []syncservice.TargetResult{{TargetID: request.Targets[0].ID, Status: syncservice.TargetSynced, ChannelID: "42"}}}, nil
+		unit := request.Units[0]
+		return syncservice.MultiResult{Units: []syncservice.UnitResult{{UnitID: unit.UnitID, AssetID: unit.Asset.ID, TargetID: unit.Target.ID, Status: syncservice.TargetSynced, ChannelID: "42", EffectiveModels: []string{"gpt-4.1"}, ExcludedModels: []string{}, Warnings: []string{}}}}, nil
 	}
 	router := env.router(t)
-	body := `{"upstream_id":"source-a","asset_id":"source-a:channel:7:key:0","target_ids":["target-a"],"settings":{"models":["gpt-4.1"],"group":"default","priority":0,"weight":100}}`
+	body := staticSyncBody("u-1", "source-a", "source-a:channel:7:key:0", "target-a", 100)
 
 	done := make(chan struct{}, 2)
 	call := func() {
@@ -1127,6 +1136,14 @@ func cloneDiscoverySnapshot(snapshot discovery.Snapshot) discovery.Snapshot {
 				cloned.Assets[i].Metadata[key] = value
 			}
 		}
+	}
+	if snapshot.GroupCatalog != nil {
+		catalog := *snapshot.GroupCatalog
+		catalog.Groups = append([]platform.UpstreamGroup(nil), snapshot.GroupCatalog.Groups...)
+		for i := range catalog.Groups {
+			catalog.Groups[i].Models = append([]string(nil), snapshot.GroupCatalog.Groups[i].Models...)
+		}
+		cloned.GroupCatalog = &catalog
 	}
 	return cloned
 }

@@ -460,11 +460,14 @@ func TestOperationDependencyFailuresAndBoundaries(t *testing.T) {
 
 	t.Run("sync request-level secret failure", func(t *testing.T) {
 		env := newTestEnvironment()
-		env.syncer.result = syncservice.BatchResult{}
+		env.syncer.multiResult = syncservice.MultiResult{Units: []syncservice.UnitResult{{
+			UnitID: "u-1", AssetID: "source-a:channel:7:key:0", TargetID: "target-a", Status: syncservice.TargetFailed,
+			Code: "secret_unavailable", EffectiveModels: []string{}, ExcludedModels: []string{}, Warnings: []string{},
+		}}}
 		env.syncer.err = platform.ErrSecretGrantRequired
-		body := `{"upstream_id":"source-a","asset_id":"source-a:channel:7:key:0","target_ids":["target-a"],"settings":{"models":["gpt-4.1"],"group":"default","priority":0,"weight":100}}`
+		body := staticSyncBody("u-1", "source-a", "source-a:channel:7:key:0", "target-a", 100)
 		recorder, envelope := request(t, env.router(t), http.MethodPost, "/api/v1/sync", body, "application/json")
-		if recorder.Code != http.StatusUnprocessableEntity || errorCode(t, envelope) != "secret_unavailable" {
+		if recorder.Code != http.StatusOK || dataObject(t, envelope)["units"].([]any)[0].(map[string]any)["code"] != "secret_unavailable" {
 			t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 		}
 	})
@@ -504,19 +507,19 @@ func TestBatchSyncTargetResolverFailuresRemainPerTarget(t *testing.T) {
 				platform.ProviderOpenAI: {Modes: []platform.SyncMode{platform.SyncModeStaticKey}},
 			}},
 		}
-		env.syncer.result = syncservice.BatchResult{Targets: []syncservice.TargetResult{{TargetID: "target-b", Status: syncservice.TargetSynced, ChannelID: "84"}}}
-		body := `{"upstream_id":"source-a","asset_id":"source-a:channel:7:key:0","target_ids":["target-a","target-b"],"settings":{"models":["gpt-4.1"],"group":"default","priority":0,"weight":100}}`
+		env.syncer.multiResult = syncservice.MultiResult{Units: []syncservice.UnitResult{{UnitID: "u-b", AssetID: "source-a:channel:7:key:0", TargetID: "target-b", Status: syncservice.TargetSynced, ChannelID: "84", EffectiveModels: []string{"gpt-4.1"}, ExcludedModels: []string{}, Warnings: []string{}}}}
+		body := `{"upstream_id":"source-a","units":[{"unit_id":"u-a","asset_id":"source-a:channel:7:key:0","target_id":"target-a","settings":{"models":["gpt-4.1"],"target_group":"default","priority":0,"weight":100}},{"unit_id":"u-b","asset_id":"source-a:channel:7:key:0","target_id":"target-b","settings":{"models":["gpt-4.1"],"target_group":"default","priority":0,"weight":100}}]}`
 		recorder, envelope := request(t, env.router(t), http.MethodPost, "/api/v1/sync", body, "application/json")
 		if recorder.Code != http.StatusOK || strings.Contains(recorder.Body.String(), testSecret) || strings.Contains(recorder.Body.String(), "resolver detail") {
 			t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 		}
-		results := dataObject(t, envelope)["targets"].([]any)
+		results := dataObject(t, envelope)["units"].([]any)
 		if len(results) != 2 || results[0].(map[string]any)["target_id"] != "target-a" || results[0].(map[string]any)["status"] != "failed" ||
 			results[1].(map[string]any)["target_id"] != "target-b" || results[1].(map[string]any)["status"] != "synced" {
 			t.Fatalf("results=%#v", results)
 		}
-		if env.syncer.calls != 1 || len(env.syncer.request.Targets) != 1 || env.syncer.request.Targets[0].ID != "target-b" {
-			t.Fatalf("sync request=%#v calls=%d", env.syncer.request.Targets, env.syncer.calls)
+		if env.syncer.calls != 1 || len(env.syncer.multiRequest.Units) != 1 || env.syncer.multiRequest.Units[0].Target.ID != "target-b" {
+			t.Fatalf("sync request=%#v calls=%d", env.syncer.multiRequest.Units, env.syncer.calls)
 		}
 	})
 
@@ -525,12 +528,12 @@ func TestBatchSyncTargetResolverFailuresRemainPerTarget(t *testing.T) {
 		resolved := env.resolver.targets["target-a"]
 		resolved.err = context.DeadlineExceeded
 		env.resolver.targets["target-a"] = resolved
-		body := `{"upstream_id":"source-a","asset_id":"source-a:channel:7:key:0","target_ids":["target-a"],"settings":{"models":["gpt-4.1"],"group":"default","priority":0,"weight":100}}`
+		body := staticSyncBody("u-1", "source-a", "source-a:channel:7:key:0", "target-a", 100)
 		recorder, envelope := request(t, env.router(t), http.MethodPost, "/api/v1/sync", body, "application/json")
 		if recorder.Code != http.StatusOK {
 			t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 		}
-		result := dataObject(t, envelope)["targets"].([]any)[0].(map[string]any)
+		result := dataObject(t, envelope)["units"].([]any)[0].(map[string]any)
 		if result["status"] != "failed" || result["code"] != "upstream_timeout" || result["retryable"] != true {
 			t.Fatalf("result=%#v", result)
 		}
@@ -543,20 +546,21 @@ func TestBatchSyncTargetResolverFailuresRemainPerTarget(t *testing.T) {
 func TestPendingNeedsReconcilePreventsDuplicateSyncAndCanBeDeleted(t *testing.T) {
 	env := newTestEnvironment()
 	env.store.cfg.Upstreams[0].SyncMappings = []config.SyncMapping{}
-	env.syncer.result = syncservice.BatchResult{Targets: []syncservice.TargetResult{{
-		TargetID: "target-a", Status: syncservice.TargetNeedsReconcile, Code: "mapping_persist_failed", ChannelID: "provisional-42", Retryable: true,
+	env.syncer.multiResult = syncservice.MultiResult{Units: []syncservice.UnitResult{{
+		UnitID: "u-1", AssetID: "source-a:channel:7:key:0", TargetID: "target-a", Status: syncservice.TargetNeedsReconcile,
+		Code: "mapping_persist_failed", ChannelID: "provisional-42", Retryable: true, EffectiveModels: []string{}, ExcludedModels: []string{}, Warnings: []string{},
 	}}}
 	env.syncer.err = syncservice.ErrMappingPersist
 	target := env.resolver.targets["target-a"].adapter.(*fakeTarget)
 	target.channels = []platform.Channel{{ID: "provisional-42", Name: "provisional", Models: []string{"gpt-4.1"}, Group: "default", Weight: 100, Enabled: true}}
 	router := env.router(t)
-	body := `{"upstream_id":"source-a","asset_id":"source-a:channel:7:key:0","target_ids":["target-a"],"settings":{"models":["gpt-4.1"],"group":"default","priority":0,"weight":100}}`
+	body := staticSyncBody("u-1", "source-a", "source-a:channel:7:key:0", "target-a", 100)
 
 	recorder, envelope := request(t, router, http.MethodPost, "/api/v1/sync", body, "application/json")
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("first sync status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	first := dataObject(t, envelope)["targets"].([]any)[0].(map[string]any)
+	first := dataObject(t, envelope)["units"].([]any)[0].(map[string]any)
 	if first["status"] != "needs_reconcile" || first["channel_id"] != "provisional-42" {
 		t.Fatalf("first result=%#v", first)
 	}
@@ -577,7 +581,7 @@ func TestPendingNeedsReconcilePreventsDuplicateSyncAndCanBeDeleted(t *testing.T)
 	if recorder.Code != http.StatusOK || env.syncer.calls != 1 {
 		t.Fatalf("repeat sync status=%d calls=%d body=%s", recorder.Code, env.syncer.calls, recorder.Body.String())
 	}
-	repeated := dataObject(t, envelope)["targets"].([]any)[0].(map[string]any)
+	repeated := dataObject(t, envelope)["units"].([]any)[0].(map[string]any)
 	if repeated["status"] != "needs_reconcile" || repeated["channel_id"] != "provisional-42" {
 		t.Fatalf("repeat result=%#v", repeated)
 	}
@@ -857,7 +861,7 @@ func TestSuccessfulSyncAndAcceptDriftClearDifferences(t *testing.T) {
 			request(t, router, http.MethodPost, "/api/v1/targets/target-a/reconcile", "", "")
 
 			if operation == "sync" {
-				body := `{"upstream_id":"source-a","asset_id":"source-a:channel:7:key:0","target_ids":["target-a"],"settings":{"models":["gpt-4.1"],"group":"default","priority":0,"weight":100}}`
+				body := staticSyncBody("u-1", "source-a", "source-a:channel:7:key:0", "target-a", 100)
 				recorder, _ := request(t, router, http.MethodPost, "/api/v1/sync", body, "application/json")
 				if recorder.Code != http.StatusOK {
 					t.Fatalf("sync status=%d body=%s", recorder.Code, recorder.Body.String())
@@ -893,10 +897,10 @@ func TestZeroWeightIsAcceptedAndForwarded(t *testing.T) {
 		t.Fatalf("update status=%d body=%s input=%#v", recorder.Code, recorder.Body.String(), target.updated)
 	}
 
-	syncBody := `{"upstream_id":"source-a","asset_id":"source-a:channel:7:key:0","target_ids":["target-a"],"settings":{"models":["gpt-4.1"],"group":"default","priority":0,"weight":0}}`
+	syncBody := staticSyncBody("u-1", "source-a", "source-a:channel:7:key:0", "target-a", 0)
 	recorder, _ = request(t, router, http.MethodPost, "/api/v1/sync", syncBody, "application/json")
-	if recorder.Code != http.StatusOK || env.syncer.request.Settings.Weight != 0 {
-		t.Fatalf("sync status=%d body=%s request=%#v", recorder.Code, recorder.Body.String(), env.syncer.request.Settings)
+	if recorder.Code != http.StatusOK || env.syncer.multiRequest.Units[0].Settings.Weight != 0 {
+		t.Fatalf("sync status=%d body=%s request=%#v", recorder.Code, recorder.Body.String(), env.syncer.multiRequest.Units)
 	}
 }
 

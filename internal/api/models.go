@@ -162,11 +162,35 @@ type managedChannel struct {
 }
 
 type syncRequest struct {
-	UpstreamID string                   `json:"upstream_id"`
-	AssetID    string                   `json:"asset_id"`
-	TargetIDs  []string                 `json:"target_ids"`
-	Settings   platform.ChannelSettings `json:"settings"`
-	Grant      syncGrantRequest         `json:"grant"`
+	UpstreamID string            `json:"upstream_id"`
+	Units      []syncUnitRequest `json:"units"`
+	Grant      syncGrantRequest  `json:"grant"`
+}
+
+type syncUnitRequest struct {
+	UnitID        string                  `json:"unit_id"`
+	AssetID       string                  `json:"asset_id"`
+	TargetID      string                  `json:"target_id"`
+	UpstreamGroup string                  `json:"upstream_group,omitempty"`
+	Settings      syncUnitSettingsRequest `json:"settings"`
+}
+
+type syncUnitSettingsRequest struct {
+	Models      []string `json:"models"`
+	TargetGroup string   `json:"target_group"`
+	Priority    int      `json:"priority"`
+	Weight      int      `json:"weight"`
+}
+
+type upstreamGroupResponse struct {
+	Name           string   `json:"name"`
+	Description    string   `json:"description,omitempty"`
+	Ratio          *float64 `json:"ratio"`
+	RatioKnown     bool     `json:"ratio_known"`
+	Models         []string `json:"models"`
+	ModelCount     int      `json:"model_count"`
+	ModelsVerified bool     `json:"models_verified"`
+	Auto           bool     `json:"auto"`
 }
 
 type syncGrantRequest struct {

@@ -26,6 +26,8 @@ var safeErrorMessages = map[string]string{
 	"upstream_failure":    "平台请求失败",
 	"upstream_timeout":    "平台请求超时",
 	"internal_error":      "内部错误",
+	"group_required":      "必须选择上游分组",
+	"group_unknown":       "上游分组不可用",
 }
 
 type errorDescriptor struct {

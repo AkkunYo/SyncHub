@@ -437,11 +437,14 @@ func TestSystemAcceptanceSyncReconcileAndChannelLifecycle(t *testing.T) {
 	}
 
 	syncEnvelope := acceptanceRequest(t, router, http.MethodPost, "/api/v1/sync", map[string]any{
-		"upstream_id": "source-a", "asset_id": "source-a:channel:7", "target_ids": []string{"target-a", "target-b"},
-		"settings": map[string]any{"models": []string{"gpt-4.1"}, "group": "default", "priority": 0, "weight": 100},
-		"grant":    map[string]any{"security_proof": acceptanceProof, "allow_auth_file": false},
+		"upstream_id": "source-a",
+		"units": []map[string]any{
+			{"unit_id": "u-a", "asset_id": "source-a:channel:7", "target_id": "target-a", "settings": map[string]any{"models": []string{"gpt-4.1"}, "target_group": "default", "priority": 0, "weight": 100}},
+			{"unit_id": "u-b", "asset_id": "source-a:channel:7", "target_id": "target-b", "settings": map[string]any{"models": []string{"gpt-4.1"}, "target_group": "default", "priority": 0, "weight": 100}},
+		},
+		"grant": map[string]any{"security_proof": acceptanceProof, "allow_auth_file": false},
 	}, http.StatusOK)
-	results := acceptanceData(t, syncEnvelope)["targets"].([]any)
+	results := acceptanceData(t, syncEnvelope)["units"].([]any)
 	if len(results) != 2 || results[0].(map[string]any)["status"] != "synced" || results[0].(map[string]any)["channel_id"] != "101" ||
 		results[1].(map[string]any)["status"] != "synced" || results[1].(map[string]any)["channel_id"] != "201" {
 		t.Fatalf("sync results = %#v", results)
