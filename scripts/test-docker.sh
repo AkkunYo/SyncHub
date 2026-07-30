@@ -40,6 +40,7 @@ assert_contains Dockerfile 'EXPOSE 8888'
 assert_contains Dockerfile 'ENTRYPOINT ["/usr/local/bin/docker-entrypoint"]'
 assert_not_contains Dockerfile 'COPY data/config.yaml'
 assert_contains .dockerignore 'data/config.yaml'
+assert_contains docker-entrypoint.sh 'su-exec synchub /usr/local/bin/sync-hub "$@"'
 
 assert_contains docker-compose.yml '127.0.0.1:8888:8888'
 assert_contains docker-compose.yml 'synchub_data:/data'
@@ -49,7 +50,7 @@ assert_contains README.md 'docker compose up -d --build'
 
 compose_output=$(cd "$repo_root" && docker compose config)
 case "$compose_output" in
-	*'127.0.0.1:8888:8888'*'synchub_data:'*) ;;
+	*'host_ip: 127.0.0.1'*'target: 8888'*'source: synchub_data'*'target: /data'*) ;;
 	*) fail 'normalized Compose configuration lost local port or persistent data volume' ;;
 esac
 

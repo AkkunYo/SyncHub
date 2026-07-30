@@ -1,0 +1,12 @@
+.git
+.codegraph
+build
+data/config.yaml
+data/config.yaml.lock
+docs
+web/node_modules
+web/coverage
+web/dist
+web/playwright-report
+web/test-results
+*.log
