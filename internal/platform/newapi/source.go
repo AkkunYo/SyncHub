@@ -142,6 +142,12 @@ func NewSource(cfg Config, client *http.Client) (*Source, error) {
 	cfg.BaseURL = strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
 	cfg.AccessToken = strings.TrimSpace(cfg.AccessToken)
 	cfg.DiscoveryMode = strings.ToLower(strings.TrimSpace(cfg.DiscoveryMode))
+	if cfg.DiscoveryMode == "" {
+		cfg.DiscoveryMode = config.DiscoveryModeToken
+	}
+	if cfg.DiscoveryMode != config.DiscoveryModeToken {
+		return nil, errors.New("only ordinary-user token discovery is supported")
+	}
 	if cfg.SourceID == "" {
 		return nil, errors.New("source id is required")
 	}
@@ -168,14 +174,6 @@ func NewSource(cfg Config, client *http.Client) (*Source, error) {
 		client = &http.Client{}
 	}
 
-	var initial discoveryMode
-	switch cfg.DiscoveryMode {
-	case config.DiscoveryModeToken:
-		initial = modeToken
-	default:
-		initial = modeUnresolved
-	}
-
 	return &Source{
 		config: cfg,
 		transport: transport{
@@ -187,32 +185,22 @@ func NewSource(cfg Config, client *http.Client) (*Source, error) {
 		},
 		catalog:      platform.DefaultCatalog(),
 		records:      make(map[string]assetRecord),
-		resolvedMode: initial,
+		resolvedMode: modeToken,
 	}, nil
 }
 
 func (s *Source) Capabilities(ctx context.Context) (platform.SourceCapabilities, error) {
-	mode, err := s.ensureMode(ctx)
-	if err != nil {
+	if ctx == nil {
+		return platform.SourceCapabilities{}, errors.New("context is required")
+	}
+	if err := ctx.Err(); err != nil {
 		return platform.SourceCapabilities{}, err
 	}
-	switch mode {
-	case modeToken:
-		return platform.SourceCapabilities{AssetKinds: []platform.AssetKind{platform.AssetProxyKey}, SecretResolution: true, GroupCatalog: true}, nil
-	default:
-		return platform.SourceCapabilities{AssetKinds: []platform.AssetKind{platform.AssetStaticAPIKey}, SecretResolution: true}, nil
-	}
+	return platform.SourceCapabilities{AssetKinds: []platform.AssetKind{platform.AssetProxyKey}, SecretResolution: true, GroupCatalog: true}, nil
 }
 
 func (s *Source) ListAssets(ctx context.Context, cursor platform.PageCursor) (platform.AssetPage, error) {
-	mode, err := s.ensureMode(ctx)
-	if err != nil {
-		return platform.AssetPage{}, err
-	}
-	if mode == modeToken {
-		return s.listTokenAssets(ctx, cursor)
-	}
-	return s.listChannelAssets(ctx, cursor)
+	return s.listTokenAssets(ctx, cursor)
 }
 
 func (s *Source) listTokenAssets(ctx context.Context, cursor platform.PageCursor) (platform.AssetPage, error) {
@@ -314,14 +302,6 @@ func (s *Source) normalizeToken(token tokenResponse, now int64) (platform.Upstre
 }
 
 func (s *Source) GroupCatalog(ctx context.Context) (platform.GroupCatalog, error) {
-	mode, err := s.ensureMode(ctx)
-	if err != nil {
-		return platform.GroupCatalog{}, err
-	}
-	if mode != modeToken {
-		return platform.GroupCatalog{}, errors.New("New API channel mode does not expose a user group catalog")
-	}
-
 	var self userSelfResponse
 	if err := s.transport.get(ctx, "/api/user/self", "", &self); err != nil {
 		return platform.GroupCatalog{}, err
@@ -433,20 +413,7 @@ func (s *Source) DiscoveryModeStatus() platform.DiscoveryModeStatus {
 	if s == nil {
 		return platform.DiscoveryModeStatus{EffectiveMode: "unresolved", Status: "unresolved"}
 	}
-	s.mu.RLock()
-	mode := s.resolvedMode
-	errorCode := s.modeErrorCode
-	s.mu.RUnlock()
-	if mode == modeChannel {
-		return platform.DiscoveryModeStatus{EffectiveMode: "channel", Status: "ready"}
-	}
-	if mode == modeToken {
-		return platform.DiscoveryModeStatus{EffectiveMode: "token", Status: "ready"}
-	}
-	if errorCode != "" {
-		return platform.DiscoveryModeStatus{EffectiveMode: "unresolved", Status: "error", ErrorCode: errorCode}
-	}
-	return platform.DiscoveryModeStatus{EffectiveMode: "unresolved", Status: "unresolved"}
+	return platform.DiscoveryModeStatus{EffectiveMode: "token", Status: "ready"}
 }
 
 func discoveryModeErrorCode(err error) string {
@@ -617,64 +584,15 @@ func (s *Source) normalizeChannel(channel channelResponse) ([]platform.UpstreamA
 }
 
 func (s *Source) ResolveSecret(ctx context.Context, assetID string, grant platform.SecretGrant) (platform.ResolvedSecret, error) {
-	tokenMode, err := s.usesTokenMode(ctx)
+	resolved, err := s.ResolveSecrets(ctx, []string{assetID}, grant)
 	if err != nil {
 		return platform.ResolvedSecret{}, err
 	}
-	if tokenMode {
-		resolved, err := s.ResolveSecrets(ctx, []string{assetID}, grant)
-		if err != nil {
-			return platform.ResolvedSecret{}, err
-		}
-		secret, ok := resolved[assetID]
-		if !ok {
-			return platform.ResolvedSecret{}, platform.ErrSecretUnavailable
-		}
-		return secret, nil
-	}
-
-	proof := strings.TrimSpace(grant.SecurityProof)
-	if proof == "" {
-		return platform.ResolvedSecret{}, platform.ErrSecretGrantRequired
-	}
-	record, err := s.resolveRecord(assetID)
-	if err != nil {
-		return platform.ResolvedSecret{}, err
-	}
-	if !record.enabled {
-		return platform.ResolvedSecret{}, platform.ErrAssetDisabled
-	}
-	if !record.secretReadable {
+	secret, ok := resolved[assetID]
+	if !ok {
 		return platform.ResolvedSecret{}, platform.ErrSecretUnavailable
 	}
-
-	var response channelKeyResponse
-	if err := s.transport.do(ctx, request{
-		method: http.MethodPost,
-		path:   "/api/channel/" + strconv.Itoa(record.channelID) + "/key",
-		proof:  proof,
-	}, &response); err != nil {
-		return platform.ResolvedSecret{}, err
-	}
-	if !response.Success || response.Data.Key == "" {
-		return platform.ResolvedSecret{}, platform.ErrSecretUnavailable
-	}
-	secret := strings.TrimSpace(response.Data.Key)
-	if record.keyIndex != nil {
-		keys, err := parseMultiKeys(secret)
-		if err != nil || *record.keyIndex < 0 || *record.keyIndex >= len(keys) {
-			return platform.ResolvedSecret{}, platform.ErrSecretUnavailable
-		}
-		secret = keys[*record.keyIndex]
-	}
-	if secret == "" {
-		return platform.ResolvedSecret{}, platform.ErrSecretUnavailable
-	}
-	metadata := map[string]string{"channel_id": strconv.Itoa(record.channelID)}
-	if record.keyIndex != nil {
-		metadata["key_index"] = strconv.Itoa(*record.keyIndex)
-	}
-	return platform.ResolvedSecret{Kind: platform.AssetStaticAPIKey, Bytes: []byte(secret), Metadata: metadata}, nil
+	return secret, nil
 }
 
 func (s *Source) usesTokenMode(ctx context.Context) (bool, error) {
@@ -705,14 +623,6 @@ func (s *Source) ResolveSecrets(ctx context.Context, assetIDs []string, _ platfo
 	if len(assetIDs) < 1 || len(assetIDs) > maxTokenSecretBatchSize {
 		return nil, errors.New("New API token secret batch size is invalid")
 	}
-	tokenMode, err := s.usesTokenMode(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if !tokenMode {
-		return nil, platform.ErrSecretUnavailable
-	}
-
 	ids := make([]int, 0, len(assetIDs))
 	seenAssets := make(map[string]struct{}, len(assetIDs))
 	seenTokens := make(map[int]struct{}, len(assetIDs))
