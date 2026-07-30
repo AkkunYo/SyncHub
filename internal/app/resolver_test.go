@@ -270,163 +270,30 @@ func TestAdapterResolverErrorsDoNotExposeCredentials(t *testing.T) {
 func TestAdapterResolverRejectsCPAUpstreamDiscovery(t *testing.T) {
 	t.Parallel()
 
-	const (
-		managementKey = "REPLACE_WITH_CPA_MANAGEMENT_KEY"
-		assetID       = "source-cpa:cpa:gemini-stable-id"
-		secretValue   = "REPLACE_WITH_DISCOVERED_GEMINI_KEY"
-	)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("X-Management-Key"); got != managementKey {
-			t.Errorf("X-Management-Key = %q", got)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/v0/management/auth-files":
-			_, _ = io.WriteString(w, `{"files":[{"id":"gemini-stable-id","auth_index":"stable-index","name":"gemini:apikey","provider":"gemini","status":"ready","runtime_only":true}]}`)
-		case "/v0/management/auth-files/models":
-			_, _ = io.WriteString(w, `{"models":[{"id":"gemini-2.5-pro"}]}`)
-		case "/v0/management/gemini-api-key":
-			_, _ = io.WriteString(w, `{"gemini-api-key":[{"api-key":"`+secretValue+`","auth-index":"stable-index"}]}`)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(server.Close)
-
-	resolver := NewAdapterResolver(&memoryConfigStore{cfg: config.Default()}, server.Client())
+	resolver := NewAdapterResolver(&memoryConfigStore{cfg: config.Default()}, nil)
 	cfg := config.UpstreamConfig{
-		ID: "source-cpa", Type: "cliproxyapi", BaseURL: server.URL, ManagementKey: managementKey,
+		ID: "source-cpa", Type: "cliproxyapi", BaseURL: "https://cpa.example.test", ManagementKey: "REPLACE_WITH_CPA_MANAGEMENT_KEY",
 	}
 	discoverySource, err := resolver.ResolveUpstream(context.Background(), cfg)
 	if !errors.Is(err, ErrUnsupportedPlatform) {
 		t.Fatalf("ResolveUpstream(discovery) error = %v, want ErrUnsupportedPlatform", err)
 	}
-	return
-	page, err := discoverySource.ListAssets(context.Background(), platform.PageCursor{})
-	if err != nil || len(page.Assets) != 1 || page.Assets[0].ID != assetID {
-		t.Fatalf("ListAssets() = %#v, %v", page, err)
-	}
-
-	syncSource, err := resolver.ResolveUpstream(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("ResolveUpstream(sync) error = %v", err)
-	}
-	if syncSource != discoverySource {
-		t.Fatal("same upstream configuration returned a new source and lost discovery state")
-	}
-	secret, err := syncSource.ResolveSecret(context.Background(), assetID, platform.SecretGrant{})
-	if err != nil {
-		t.Fatalf("ResolveSecret() error = %v", err)
-	}
-	defer secret.Wipe()
-	if got := string(secret.Bytes); got != secretValue {
-		t.Fatalf("ResolveSecret() = %q", got)
+	if discoverySource != nil {
+		t.Fatalf("ResolveUpstream(discovery) source = %T, want nil", discoverySource)
 	}
 }
 
 func TestAdapterResolverRejectsCPAUpstreamCacheConstruction(t *testing.T) {
 	t.Parallel()
 
-	const (
-		credentialA = "REPLACE_WITH_CPA_KEY_A"
-		credentialB = "REPLACE_WITH_CPA_KEY_B"
-	)
-	newServer := func(wantCredential, authID string) *httptest.Server {
-		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if got := r.Header.Get("X-Management-Key"); got != wantCredential {
-				http.Error(w, "invalid management authentication", http.StatusUnauthorized)
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			switch r.URL.Path {
-			case "/v0/management/auth-files":
-				_, _ = io.WriteString(w, `{"files":[{"id":"`+authID+`","auth_index":"index-`+authID+`","name":"gemini:apikey","provider":"gemini","status":"ready","runtime_only":true}]}`)
-			case "/v0/management/auth-files/models":
-				_, _ = io.WriteString(w, `{"models":[]}`)
-			default:
-				http.NotFound(w, r)
-			}
-		}))
-	}
-	serverA := newServer(credentialA, "asset-a")
-	serverB := newServer(credentialB, "asset-b")
-	t.Cleanup(serverA.Close)
-	t.Cleanup(serverB.Close)
-
-	resolver := NewAdapterResolver(&memoryConfigStore{cfg: config.Default()}, serverA.Client())
-	cfgA := config.UpstreamConfig{ID: "shared-source", Type: "cliproxyapi", BaseURL: serverA.URL, ManagementKey: credentialA}
+	resolver := NewAdapterResolver(&memoryConfigStore{cfg: config.Default()}, nil)
+	cfgA := config.UpstreamConfig{ID: "shared-source", Type: "cliproxyapi", BaseURL: "https://cpa.example.test", ManagementKey: "REPLACE_WITH_CPA_KEY_A"}
 	first, err := resolver.ResolveUpstream(context.Background(), cfgA)
 	if !errors.Is(err, ErrUnsupportedPlatform) {
 		t.Fatalf("ResolveUpstream() error = %v, want ErrUnsupportedPlatform", err)
 	}
-	return
-
-	const concurrentResolvers = 32
-	resolved := make(chan platform.UpstreamAdapter, concurrentResolvers)
-	errs := make(chan error, concurrentResolvers)
-	var wait sync.WaitGroup
-	for range concurrentResolvers {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
-			adapter, resolveErr := resolver.ResolveUpstream(context.Background(), cfgA)
-			resolved <- adapter
-			errs <- resolveErr
-		}()
-	}
-	wait.Wait()
-	close(resolved)
-	close(errs)
-	for resolveErr := range errs {
-		if resolveErr != nil {
-			t.Fatalf("concurrent ResolveUpstream() error = %v", resolveErr)
-		}
-	}
-	for adapter := range resolved {
-		if adapter != first {
-			t.Fatal("concurrent same-configuration resolution returned different sources")
-		}
-	}
-
-	pageA, err := first.ListAssets(context.Background(), platform.PageCursor{})
-	if err != nil || len(pageA.Assets) != 1 {
-		t.Fatalf("source A ListAssets() = %#v, %v", pageA, err)
-	}
-	cfgB := config.UpstreamConfig{ID: "shared-source", Type: "cliproxyapi", BaseURL: serverB.URL, ManagementKey: credentialB}
-	second, err := resolver.ResolveUpstream(context.Background(), cfgB)
-	if err != nil {
-		t.Fatalf("ResolveUpstream(changed config) error = %v", err)
-	}
-	if second == first {
-		t.Fatal("BaseURL and effective credential change reused the old source")
-	}
-	if _, err := second.ResolveSecret(context.Background(), pageA.Assets[0].ID, platform.SecretGrant{}); !errors.Is(err, platform.ErrSecretUnavailable) {
-		t.Fatalf("replacement source inherited prior records: %v", err)
-	}
-	pageB, err := second.ListAssets(context.Background(), platform.PageCursor{})
-	if err != nil || len(pageB.Assets) != 1 || pageB.Assets[0].ID == pageA.Assets[0].ID {
-		t.Fatalf("source B ListAssets() = %#v, %v", pageB, err)
-	}
-
-	typeChanged, err := resolver.ResolveUpstream(context.Background(), config.UpstreamConfig{
-		ID: "shared-source", Type: "newapi", BaseURL: serverB.URL, AccessToken: credentialB,
-	})
-	if err != nil {
-		t.Fatalf("ResolveUpstream(type changed) error = %v", err)
-	}
-	if typeChanged == second || reflect.TypeOf(typeChanged) != reflect.TypeOf((*newapi.Source)(nil)) {
-		t.Fatalf("type change did not replace cached source: %T", typeChanged)
-	}
-
-	const secretCanary = "REPLACE_WITH_PRIVATE_CACHE_KEY"
-	_, err = resolver.ResolveUpstream(context.Background(), config.UpstreamConfig{
-		ID: "shared-source", Type: "cliproxyapi", BaseURL: "ftp://example.test/" + secretCanary, ManagementKey: secretCanary,
-	})
-	if err == nil {
-		t.Fatal("invalid replacement configuration was accepted")
-	}
-	if strings.Contains(err.Error(), secretCanary) {
-		t.Fatalf("replacement error leaked credential: %v", err)
+	if first != nil {
+		t.Fatalf("ResolveUpstream() source = %T, want nil", first)
 	}
 }
 
@@ -445,17 +312,8 @@ func TestAdapterResolverRejectsCPAProxyKeyUpstream(t *testing.T) {
 	if !errors.Is(err, ErrUnsupportedPlatform) {
 		t.Fatalf("ResolveUpstream() error = %v, want ErrUnsupportedPlatform", err)
 	}
-	return
-	if again, err := resolver.ResolveUpstream(context.Background(), cfg); err != nil || again != first {
-		t.Fatalf("unchanged proxy key ResolveUpstream() = %T, %v; want cached adapter", again, err)
-	}
-	cfg.ProxyAPIKey = "REPLACE_WITH_CPA_PROXY_KEY_B"
-	second, err := resolver.ResolveUpstream(context.Background(), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if second == first {
-		t.Fatal("proxy_api_key change reused cached CPA source")
+	if first != nil {
+		t.Fatalf("ResolveUpstream() source = %T, want nil", first)
 	}
 }
 
