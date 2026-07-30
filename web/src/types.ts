@@ -1,6 +1,8 @@
 export type ViewName = 'matrix' | 'channels' | 'drift' | 'settings'
 
-export type PlatformType = 'newapi' | 'cliproxyapi' | 'sub2api'
+export type TargetPlatformType = 'newapi' | 'cliproxyapi'
+export type UpstreamPlatformType = 'newapi' | 'generic'
+export type PlatformType = TargetPlatformType | UpstreamPlatformType
 
 export interface AppSettings {
   host: string
@@ -13,7 +15,7 @@ export interface AppSettings {
 export interface TargetConfig {
   id: string
   name: string
-  type: Exclude<PlatformType, 'sub2api'>
+  type: TargetPlatformType
   base_url: string
   user_id?: number
 }
@@ -21,7 +23,7 @@ export interface TargetConfig {
 export interface UpstreamConfig {
   id: string
   name: string
-  type: PlatformType
+  type: UpstreamPlatformType
   base_url: string
   user_id?: number
   sync_mappings?: unknown[]

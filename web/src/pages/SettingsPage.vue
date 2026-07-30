@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch, watchEffect } from 'vue'
+import { computed, reactive, ref, watchEffect } from 'vue'
 import { Pencil, Plus, Save, Trash2 } from 'lucide-vue-next'
 
 import { api, safeErrorMessage } from '@/api/client'
@@ -19,8 +19,6 @@ const entityType = ref<PlatformType>('newapi')
 const baseUrl = ref('')
 const userId = ref<string | number>('')
 const credential = ref('')
-const proxyApiKey = ref('')
-const clearProxyApiKey = ref(false)
 const formError = ref('')
 const saving = ref(false)
 const deleting = ref(false)
@@ -48,22 +46,10 @@ const dialogTitle = computed(() => {
   return `${operation}${entityKind.value === 'target' ? '目标' : '上游'}实例`
 })
 const saveLabel = computed(() => `保存${entityKind.value === 'target' ? '目标' : '上游'}实例`)
-const isCPAUpstream = computed(
-  () => entityKind.value === 'upstream' && entityType.value === 'cliproxyapi',
-)
 const credentialLabel = computed(() => {
+  if (entityType.value === 'generic') return 'API Key'
   if (entityType.value === 'cliproxyapi') return '管理密钥'
-  if (entityType.value === 'sub2api') return 'API Key'
   return '访问令牌'
-})
-
-function resetProxyApiKeyFields(): void {
-  proxyApiKey.value = ''
-  clearProxyApiKey.value = false
-}
-
-watch(isCPAUpstream, (visible) => {
-  if (!visible) resetProxyApiKeyFields()
 })
 
 function resetEntityForm(): void {
@@ -74,7 +60,6 @@ function resetEntityForm(): void {
   baseUrl.value = ''
   userId.value = ''
   credential.value = ''
-  resetProxyApiKeyFields()
   formError.value = ''
 }
 
@@ -112,8 +97,8 @@ function isAbsoluteHttpUrl(value: string): boolean {
 }
 
 function credentialField(): 'access_token' | 'management_key' | 'api_key' {
+  if (entityType.value === 'generic') return 'api_key'
   if (entityType.value === 'cliproxyapi') return 'management_key'
-  if (entityType.value === 'sub2api') return 'api_key'
   return 'access_token'
 }
 
@@ -154,13 +139,8 @@ async function submitEntity(): Promise<void> {
   }
   if (submittedUserId !== undefined) payload.user_id = submittedUserId
   if (credential.value) payload[credentialField()] = credential.value
-  if (isCPAUpstream.value) {
-    if (clearProxyApiKey.value) payload.proxy_api_key = ''
-    else if (proxyApiKey.value) payload.proxy_api_key = proxyApiKey.value
-  }
 
   credential.value = ''
-  resetProxyApiKeyFields()
   saving.value = true
   formError.value = ''
   try {
@@ -384,8 +364,8 @@ async function saveAppSettings(): Promise<void> {
             <span>平台类型</span>
             <select v-model="entityType" :disabled="isEditing">
               <option value="newapi">New API</option>
-              <option value="cliproxyapi">CLIProxyAPI</option>
-              <option v-if="entityKind === 'upstream'" value="sub2api">Sub2Api</option>
+              <option v-if="entityKind === 'target'" value="cliproxyapi">CLIProxyAPI</option>
+              <option v-if="entityKind === 'upstream'" value="generic">通用 API</option>
             </select>
           </label>
           <label class="field field-wide">
@@ -413,27 +393,6 @@ async function saveAppSettings(): Promise<void> {
               spellcheck="false"
             />
           </label>
-          <template v-if="isCPAUpstream">
-            <label class="field field-wide">
-              <span>代理 API Key（可选）</span>
-              <input
-                v-model="proxyApiKey"
-                type="password"
-                autocomplete="off"
-                autocapitalize="off"
-                spellcheck="false"
-                :disabled="clearProxyApiKey"
-              />
-            </label>
-            <label v-if="isEditing" class="check-row field-wide">
-              <input
-                v-model="clearProxyApiKey"
-                type="checkbox"
-                @change="clearProxyApiKey && (proxyApiKey = '')"
-              />
-              <span>清除已保存的代理 API Key</span>
-            </label>
-          </template>
         </div>
         <p v-if="formError" class="form-error" role="alert">{{ formError }}</p>
         <footer class="form-actions">
