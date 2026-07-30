@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/url"
 	"sort"
@@ -31,30 +30,16 @@ type Config struct {
 	DiscoveryMode  string
 }
 
-type discoveryMode int
-
-const (
-	modeUnresolved discoveryMode = iota
-	modeChannel
-	modeToken
-)
-
 type Source struct {
 	config    Config
 	transport transport
-	catalog   *platform.ProviderCatalog
 
-	mu            sync.RWMutex
-	records       map[string]assetRecord
-	resolvedMode  discoveryMode
-	userRole      int
-	modeErrorCode string
+	mu      sync.RWMutex
+	records map[string]assetRecord
 }
 
 type assetRecord struct {
-	channelID      int
 	tokenID        int
-	keyIndex       *int
 	enabled        bool
 	secretReadable bool
 }
@@ -95,44 +80,9 @@ type tokenBatchKeysResponse struct {
 	} `json:"data"`
 }
 
-type channelListResponse struct {
-	Success bool `json:"success"`
-	Data    struct {
-		Items    []channelResponse `json:"items"`
-		Total    int               `json:"total"`
-		Page     int               `json:"page"`
-		PageSize int               `json:"page_size"`
-	} `json:"data"`
-}
-
-type channelResponse struct {
-	ID          int    `json:"id"`
-	Type        int    `json:"type"`
-	Name        string `json:"name"`
-	Status      int    `json:"status"`
-	BaseURL     string `json:"base_url"`
-	Models      string `json:"models"`
-	Group       string `json:"group"`
-	Priority    int    `json:"priority"`
-	Weight      int    `json:"weight"`
-	ChannelInfo struct {
-		IsMultiKey         bool        `json:"is_multi_key"`
-		MultiKeySize       int         `json:"multi_key_size"`
-		MultiKeyStatusList map[int]int `json:"multi_key_status_list"`
-	} `json:"channel_info"`
-}
-
-type channelKeyResponse struct {
-	Success bool `json:"success"`
-	Data    struct {
-		Key string `json:"key"`
-	} `json:"data"`
-}
-
 type userSelfResponse struct {
 	Success bool `json:"success"`
 	Data    struct {
-		Role  int    `json:"role"`
 		Group string `json:"group"`
 	} `json:"data"`
 }
@@ -183,9 +133,7 @@ func NewSource(cfg Config, client *http.Client) (*Source, error) {
 			requestTimeout: cfg.RequestTimeout,
 			client:         client,
 		},
-		catalog:      platform.DefaultCatalog(),
-		records:      make(map[string]assetRecord),
-		resolvedMode: modeToken,
+		records: make(map[string]assetRecord),
 	}, nil
 }
 
@@ -384,203 +332,11 @@ func parseGroupRatio(raw json.RawMessage) (float64, bool) {
 	return 0, false
 }
 
-func (s *Source) ensureMode(ctx context.Context) (discoveryMode, error) {
-	s.mu.RLock()
-	mode := s.resolvedMode
-	s.mu.RUnlock()
-	if mode != modeUnresolved {
-		return mode, nil
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.resolvedMode != modeUnresolved {
-		return s.resolvedMode, nil
-	}
-
-	resolved, role, err := s.probe(ctx)
-	if err != nil {
-		s.modeErrorCode = discoveryModeErrorCode(err)
-		return modeUnresolved, err
-	}
-	s.resolvedMode = resolved
-	s.userRole = role
-	s.modeErrorCode = ""
-	return resolved, nil
-}
-
 func (s *Source) DiscoveryModeStatus() platform.DiscoveryModeStatus {
 	if s == nil {
 		return platform.DiscoveryModeStatus{EffectiveMode: "unresolved", Status: "unresolved"}
 	}
 	return platform.DiscoveryModeStatus{EffectiveMode: "token", Status: "ready"}
-}
-
-func discoveryModeErrorCode(err error) string {
-	switch {
-	case errors.Is(err, ErrUnauthenticated):
-		return "upstream_unauthenticated"
-	case errors.Is(err, ErrInsufficientPrivilege):
-		return "insufficient_privilege"
-	case errors.Is(err, platform.ErrRateLimited):
-		return "rate_limited"
-	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
-		return "upstream_timeout"
-	default:
-		return "upstream_failure"
-	}
-}
-
-func (s *Source) probe(ctx context.Context) (discoveryMode, int, error) {
-	var self userSelfResponse
-	if err := s.transport.get(ctx, "/api/user/self", "", &self); err != nil {
-		return modeUnresolved, 0, err
-	}
-	if !self.Success {
-		return modeUnresolved, 0, errors.New("New API user probe was not successful")
-	}
-
-	role := self.Data.Role
-	if role < 10 {
-		if s.config.DiscoveryMode == config.DiscoveryModeChannel {
-			return modeUnresolved, role, fmt.Errorf("%w: role %d is below admin threshold", ErrInsufficientPrivilege, role)
-		}
-		return modeToken, role, nil
-	}
-
-	query := url.Values{}
-	query.Set("p", "1")
-	query.Set("page_size", "1")
-	var channelProbe channelListResponse
-	if err := s.transport.get(ctx, "/api/channel/", query.Encode(), &channelProbe); err != nil {
-		if errors.Is(err, ErrInsufficientPrivilege) {
-			if s.config.DiscoveryMode == config.DiscoveryModeChannel {
-				return modeUnresolved, role, fmt.Errorf("%w: channel listing rejected despite role %d", ErrInsufficientPrivilege, role)
-			}
-			return modeToken, role, nil
-		}
-		return modeUnresolved, role, err
-	}
-	if !channelProbe.Success {
-		return modeUnresolved, role, errors.New("New API channel probe was not successful")
-	}
-
-	return modeChannel, role, nil
-}
-
-func (s *Source) listChannelAssets(ctx context.Context, cursor platform.PageCursor) (platform.AssetPage, error) {
-	page := cursor.Page
-	if page < 1 {
-		page = 1
-	}
-	pageSize := cursor.PageSize
-	if pageSize < 1 {
-		pageSize = s.config.PageSize
-	}
-	if pageSize > 100 {
-		pageSize = 100
-	}
-
-	query := url.Values{}
-	query.Set("p", strconv.Itoa(page))
-	query.Set("page_size", strconv.Itoa(pageSize))
-	var response channelListResponse
-	if err := s.transport.get(ctx, "/api/channel/", query.Encode(), &response); err != nil {
-		return platform.AssetPage{}, err
-	}
-	if !response.Success {
-		return platform.AssetPage{}, errors.New("New API channel listing was rejected")
-	}
-
-	assets := make([]platform.UpstreamAsset, 0, len(response.Data.Items))
-	records := make(map[string]assetRecord)
-	for _, channel := range response.Data.Items {
-		channelAssets, channelRecords := s.normalizeChannel(channel)
-		assets = append(assets, channelAssets...)
-		for id, record := range channelRecords {
-			records[id] = record
-		}
-	}
-	s.mu.Lock()
-	for id, record := range records {
-		s.records[id] = record
-	}
-	s.mu.Unlock()
-
-	total := response.Data.Total
-	responsePage := response.Data.Page
-	if responsePage < 1 {
-		responsePage = page
-	}
-	responsePageSize := response.Data.PageSize
-	if responsePageSize < 1 {
-		responsePageSize = pageSize
-	}
-	hasMore := responsePage*responsePageSize < total
-	result := platform.AssetPage{Assets: assets, HasMore: hasMore}
-	if hasMore {
-		result.Next = platform.PageCursor{Page: responsePage + 1, PageSize: responsePageSize}
-	}
-	return result, nil
-}
-
-func (s *Source) normalizeChannel(channel channelResponse) ([]platform.UpstreamAsset, map[string]assetRecord) {
-	descriptor := s.catalog.FromNewAPI(channel.Type)
-	models := splitCSV(channel.Models)
-	baseURL := strings.TrimRight(strings.TrimSpace(channel.BaseURL), "/")
-	metadata := map[string]string{
-		"channel_id": strconv.Itoa(channel.ID),
-		"group":      strings.TrimSpace(channel.Group),
-		"priority":   strconv.Itoa(channel.Priority),
-		"weight":     strconv.Itoa(channel.Weight),
-	}
-	if descriptor.DiscoveryOnly {
-		metadata["discovery_only"] = "true"
-	}
-	newAsset := func(id string, index *int, enabled bool) platform.UpstreamAsset {
-		assetMetadata := cloneMetadata(metadata)
-		name := strings.TrimSpace(channel.Name)
-		if index != nil {
-			assetMetadata["key_index"] = strconv.Itoa(*index)
-			name += " #" + strconv.Itoa(*index+1)
-		}
-		return platform.UpstreamAsset{
-			ID:             id,
-			SourceID:       s.config.SourceID,
-			SourceType:     "newapi",
-			Provider:       descriptor.ID,
-			RawType:        descriptor.RawType,
-			Kind:           platform.AssetStaticAPIKey,
-			Name:           name,
-			BaseURL:        baseURL,
-			Models:         append([]string(nil), models...),
-			Enabled:        enabled,
-			SecretReadable: enabled && !descriptor.DiscoveryOnly,
-			Metadata:       assetMetadata,
-		}
-	}
-
-	records := make(map[string]assetRecord)
-	channelEnabled := channel.Status == 1
-	if !channel.ChannelInfo.IsMultiKey {
-		id := platform.ChannelAssetID(s.config.SourceID, strconv.Itoa(channel.ID), nil)
-		asset := newAsset(id, nil, channelEnabled)
-		records[id] = assetRecord{channelID: channel.ID, enabled: channelEnabled, secretReadable: asset.SecretReadable}
-		return []platform.UpstreamAsset{asset}, records
-	}
-
-	assets := make([]platform.UpstreamAsset, 0, channel.ChannelInfo.MultiKeySize)
-	for index := 0; index < channel.ChannelInfo.MultiKeySize; index++ {
-		status, exists := channel.ChannelInfo.MultiKeyStatusList[index]
-		keyEnabled := channelEnabled && (!exists || status == 1)
-		keyIndex := index
-		id := platform.ChannelAssetID(s.config.SourceID, strconv.Itoa(channel.ID), &keyIndex)
-		asset := newAsset(id, &keyIndex, keyEnabled)
-		assets = append(assets, asset)
-		recordIndex := keyIndex
-		records[id] = assetRecord{channelID: channel.ID, keyIndex: &recordIndex, enabled: keyEnabled, secretReadable: asset.SecretReadable}
-	}
-	return assets, records
 }
 
 func (s *Source) ResolveSecret(ctx context.Context, assetID string, grant platform.SecretGrant) (platform.ResolvedSecret, error) {
@@ -593,26 +349,6 @@ func (s *Source) ResolveSecret(ctx context.Context, assetID string, grant platfo
 		return platform.ResolvedSecret{}, platform.ErrSecretUnavailable
 	}
 	return secret, nil
-}
-
-func (s *Source) usesTokenMode(ctx context.Context) (bool, error) {
-	s.mu.RLock()
-	mode := s.resolvedMode
-	s.mu.RUnlock()
-	switch mode {
-	case modeToken:
-		return true, nil
-	case modeChannel:
-		return false, nil
-	}
-	if s.config.DiscoveryMode == config.DiscoveryModeChannel {
-		return false, nil
-	}
-	resolved, err := s.ensureMode(ctx)
-	if err != nil {
-		return false, err
-	}
-	return resolved == modeToken, nil
 }
 
 func (s *Source) MaxSecretBatchSize() int {
@@ -695,36 +431,6 @@ func clearTokenKeyStrings(keys map[string]string) {
 	}
 }
 
-func (s *Source) resolveRecord(assetID string) (assetRecord, error) {
-	s.mu.RLock()
-	record, ok := s.records[assetID]
-	s.mu.RUnlock()
-	if ok {
-		return record, nil
-	}
-
-	prefix := s.config.SourceID + ":channel:"
-	if !strings.HasPrefix(assetID, prefix) {
-		return assetRecord{}, platform.ErrSecretUnavailable
-	}
-	remainder := strings.TrimPrefix(assetID, prefix)
-	channelPart := remainder
-	var keyIndex *int
-	if marker := strings.LastIndex(remainder, ":key:"); marker >= 0 {
-		channelPart = remainder[:marker]
-		parsedIndex, err := strconv.Atoi(remainder[marker+len(":key:"):])
-		if err != nil || parsedIndex < 0 {
-			return assetRecord{}, platform.ErrSecretUnavailable
-		}
-		keyIndex = &parsedIndex
-	}
-	channelID, err := strconv.Atoi(channelPart)
-	if err != nil || channelID <= 0 {
-		return assetRecord{}, platform.ErrSecretUnavailable
-	}
-	return assetRecord{channelID: channelID, keyIndex: keyIndex, enabled: true, secretReadable: true}, nil
-}
-
 func splitCSV(value string) []string {
 	parts := strings.Split(value, ",")
 	result := make([]string, 0, len(parts))
@@ -748,14 +454,6 @@ func normalizeStrings(values []string) []string {
 		result = append(result, value)
 	}
 	sort.Strings(result)
-	return result
-}
-
-func cloneMetadata(source map[string]string) map[string]string {
-	result := make(map[string]string, len(source))
-	for key, value := range source {
-		result[key] = value
-	}
 	return result
 }
 

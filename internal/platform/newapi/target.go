@@ -36,6 +36,33 @@ type Target struct {
 	catalog   *platform.ProviderCatalog
 }
 
+type channelListResponse struct {
+	Success bool `json:"success"`
+	Data    struct {
+		Items    []channelResponse `json:"items"`
+		Total    int               `json:"total"`
+		Page     int               `json:"page"`
+		PageSize int               `json:"page_size"`
+	} `json:"data"`
+}
+
+type channelResponse struct {
+	ID          int    `json:"id"`
+	Type        int    `json:"type"`
+	Name        string `json:"name"`
+	Status      int    `json:"status"`
+	BaseURL     string `json:"base_url"`
+	Models      string `json:"models"`
+	Group       string `json:"group"`
+	Priority    int    `json:"priority"`
+	Weight      int    `json:"weight"`
+	ChannelInfo struct {
+		IsMultiKey         bool        `json:"is_multi_key"`
+		MultiKeySize       int         `json:"multi_key_size"`
+		MultiKeyStatusList map[int]int `json:"multi_key_status_list"`
+	} `json:"channel_info"`
+}
+
 type targetMutationResponse struct {
 	Success bool            `json:"success"`
 	Data    json.RawMessage `json:"data"`
@@ -591,4 +618,3 @@ func validTargetBaseURL(value string) bool {
 	parsed, err := url.Parse(strings.TrimSpace(value))
 	return err == nil && parsed.Host != "" && (parsed.Scheme == "http" || parsed.Scheme == "https")
 }
-
