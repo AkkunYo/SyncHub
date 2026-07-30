@@ -156,6 +156,19 @@ describe('SyncHub console', () => {
     expect(screen.getAllByText('未同步')).toHaveLength(2)
   })
 
+  it('presents the console as a structured management workspace', async () => {
+    installConsoleApi()
+
+    renderApp()
+
+    const topbar = await screen.findByRole('banner', { name: 'SyncHub 控制台顶栏' })
+    expect(within(topbar).getByText('同步工作台')).toBeInTheDocument()
+    expect(within(topbar).getByText('资产矩阵')).toBeInTheDocument()
+    expect(screen.getByText('工作区')).toBeInTheDocument()
+    expect(screen.getByText('运行状态')).toBeInTheDocument()
+    expect(screen.getByRole('navigation', { name: '主导航' })).toBeInTheDocument()
+  })
+
   it('shows the running binary version and build time', async () => {
     installFetch((url) => {
       if (url.pathname === '/api/v1/health') {
