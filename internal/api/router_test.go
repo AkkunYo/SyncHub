@@ -637,7 +637,7 @@ func TestConfigResourceConflictsAndUpstreamCRUD(t *testing.T) {
 		t.Fatalf("upstream conflict status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 
-	create := `{"id":"source-b","name":"Source B","type":"sub2api","base_url":"https://source-b.example.com/","api_key":"` + testSecret + `"}`
+	create := `{"id":"source-b","name":"Source B","type":"generic","base_url":"https://source-b.example.com/","api_key":"` + testSecret + `"}`
 	recorder, envelope = request(t, router, http.MethodPost, "/api/v1/upstreams", create, "application/json")
 	if recorder.Code != http.StatusCreated || strings.Contains(recorder.Body.String(), testSecret) || strings.Contains(recorder.Body.String(), "api_key") {
 		t.Fatalf("create upstream status=%d body=%s", recorder.Code, recorder.Body.String())

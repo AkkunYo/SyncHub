@@ -20,7 +20,6 @@ import (
 	"github.com/AkkunYo/SyncHub/internal/platform/cliproxyapi"
 	"github.com/AkkunYo/SyncHub/internal/platform/generic"
 	"github.com/AkkunYo/SyncHub/internal/platform/newapi"
-	"github.com/AkkunYo/SyncHub/internal/platform/sub2api"
 )
 
 func TestAdapterResolverConstructsSupportedAdapters(t *testing.T) {
@@ -76,16 +75,9 @@ func TestAdapterResolverConstructsSupportedAdapters(t *testing.T) {
 		{
 			name: "new api",
 			config: config.UpstreamConfig{
-				ID: "new-source", Type: "newapi", BaseURL: "https://new.example.test", AccessToken: "test-console-token", DiscoveryMode: "channel",
+				ID: "new-source", Type: "newapi", BaseURL: "https://new.example.test", AccessToken: "test-console-token", DiscoveryMode: "token",
 			},
 			wantType: (*newapi.Source)(nil),
-		},
-		{
-			name: "CLIProxyAPI",
-			config: config.UpstreamConfig{
-				ID: "cpa-source", Type: "cliproxyapi", BaseURL: "https://cpa.example.test", ManagementKey: "test-management-key",
-			},
-			wantType: (*cliproxyapi.Source)(nil),
 		},
 		{
 			name: "generic",
@@ -93,13 +85,6 @@ func TestAdapterResolverConstructsSupportedAdapters(t *testing.T) {
 				ID: "generic-source", Name: "Shared Endpoint", Type: "generic", BaseURL: "https://generic.example.test/v1", APIKey: "test-shared-key",
 			},
 			wantType: (*generic.Source)(nil),
-		},
-		{
-			name: "Sub2Api",
-			config: config.UpstreamConfig{
-				ID: "sub-source", Type: "sub2api", BaseURL: "https://sub.example.test", APIKey: "test-admin-key",
-			},
-			wantType: (*sub2api.Source)(nil),
 		},
 	}
 	for _, test := range upstreamTests {
@@ -172,7 +157,7 @@ func TestAdapterResolverRejectsSub2ApiTargetAndInvalidInputs(t *testing.T) {
 	}
 }
 
-func TestAdapterResolverUsesInjectedClientConfiguredTimeoutAndAdminAuth(t *testing.T) {
+func TestAdapterResolverUsesInjectedClientConfiguredTimeoutAndUserAuth(t *testing.T) {
 	t.Parallel()
 
 	cfg := config.Default()
@@ -188,9 +173,6 @@ func TestAdapterResolverUsesInjectedClientConfiguredTimeoutAndAdminAuth(t *testi
 			t.Errorf("New-Api-User must be absent, got %q", got)
 		}
 		body := `{"success":true,"data":{"items":[],"total":0,"page":1,"page_size":100}}`
-		if request.URL.Path == "/api/user/self" {
-			body = `{"success":true,"data":{"role":100,"group":"default"}}`
-		}
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     make(http.Header),
@@ -200,7 +182,7 @@ func TestAdapterResolverUsesInjectedClientConfiguredTimeoutAndAdminAuth(t *testi
 	})}
 	resolver := NewAdapterResolver(store, client)
 	adapter, err := resolver.ResolveUpstream(context.Background(), config.UpstreamConfig{
-		ID: "new-source", Type: "newapi", BaseURL: "https://new.example.test", AccessToken: "test-console-token", DiscoveryMode: "channel",
+		ID: "new-source", Type: "newapi", BaseURL: "https://new.example.test", AccessToken: "test-console-token", DiscoveryMode: "token",
 	})
 	if err != nil {
 		t.Fatalf("ResolveUpstream() error = %v", err)
@@ -208,8 +190,8 @@ func TestAdapterResolverUsesInjectedClientConfiguredTimeoutAndAdminAuth(t *testi
 	if _, err := adapter.ListAssets(context.Background(), platform.PageCursor{}); err != nil {
 		t.Fatalf("ListAssets() error = %v", err)
 	}
-	if calls.Load() != 3 {
-		t.Fatalf("transport calls = %d, want 3 (probe: user/self + channel; listing: channel)", calls.Load())
+	if calls.Load() != 1 {
+		t.Fatalf("transport calls = %d, want 1 token listing call", calls.Load())
 	}
 
 	client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
@@ -246,10 +228,10 @@ func TestAdapterResolverModeStatusUsesOnlyMatchingCachedIdentity(t *testing.T) {
 	t.Cleanup(server.Close)
 	store := &memoryConfigStore{cfg: config.Default()}
 	resolver := NewAdapterResolver(store, server.Client())
-	cfg := config.UpstreamConfig{ID: "source-a", Type: "newapi", BaseURL: server.URL, AccessToken: "test-token", DiscoveryMode: "auto"}
+	cfg := config.UpstreamConfig{ID: "source-a", Type: "newapi", BaseURL: server.URL, AccessToken: "test-token", DiscoveryMode: "token"}
 
-	if got := resolver.DiscoveryModeStatus(cfg); got.Status != "unresolved" || got.EffectiveMode != "unresolved" {
-		t.Fatalf("uncached status = %#v", got)
+	if got := resolver.DiscoveryModeStatus(cfg); got.Status != "ready" || got.EffectiveMode != "token" {
+		t.Fatalf("token status = %#v", got)
 	}
 	adapter, err := resolver.ResolveUpstream(context.Background(), cfg)
 	if err != nil {
@@ -264,8 +246,8 @@ func TestAdapterResolverModeStatusUsesOnlyMatchingCachedIdentity(t *testing.T) {
 
 	changed := cfg
 	changed.AccessToken = "changed-token"
-	if got := resolver.DiscoveryModeStatus(changed); got.Status != "unresolved" || got.EffectiveMode != "unresolved" {
-		t.Fatalf("changed identity reused stale status = %#v", got)
+	if got := resolver.DiscoveryModeStatus(changed); got.Status != "ready" || got.EffectiveMode != "token" {
+		t.Fatalf("changed token status = %#v", got)
 	}
 }
 
@@ -275,7 +257,7 @@ func TestAdapterResolverErrorsDoNotExposeCredentials(t *testing.T) {
 	const canary = "test-secret-canary-value"
 	resolver := NewAdapterResolver(&memoryConfigStore{cfg: config.Default()}, nil)
 	_, err := resolver.ResolveUpstream(context.Background(), config.UpstreamConfig{
-		ID: "bad-source", Type: "sub2api", BaseURL: "https://sub.example.test/?leak=" + canary, APIKey: canary,
+		ID: "bad-source", Name: "Bad Source", Type: "generic", BaseURL: "https://sub.example.test/?leak=" + canary, APIKey: canary,
 	})
 	if err == nil {
 		t.Fatal("ResolveUpstream() error = nil, want invalid configuration")
@@ -285,7 +267,7 @@ func TestAdapterResolverErrorsDoNotExposeCredentials(t *testing.T) {
 	}
 }
 
-func TestAdapterResolverReusesCPAUpstreamDiscoveryStateForSecretResolution(t *testing.T) {
+func TestAdapterResolverRejectsCPAUpstreamDiscovery(t *testing.T) {
 	t.Parallel()
 
 	const (
@@ -316,9 +298,10 @@ func TestAdapterResolverReusesCPAUpstreamDiscoveryStateForSecretResolution(t *te
 		ID: "source-cpa", Type: "cliproxyapi", BaseURL: server.URL, ManagementKey: managementKey,
 	}
 	discoverySource, err := resolver.ResolveUpstream(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("ResolveUpstream(discovery) error = %v", err)
+	if !errors.Is(err, ErrUnsupportedPlatform) {
+		t.Fatalf("ResolveUpstream(discovery) error = %v, want ErrUnsupportedPlatform", err)
 	}
+	return
 	page, err := discoverySource.ListAssets(context.Background(), platform.PageCursor{})
 	if err != nil || len(page.Assets) != 1 || page.Assets[0].ID != assetID {
 		t.Fatalf("ListAssets() = %#v, %v", page, err)
@@ -341,7 +324,7 @@ func TestAdapterResolverReusesCPAUpstreamDiscoveryStateForSecretResolution(t *te
 	}
 }
 
-func TestAdapterResolverConcurrentReuseAndConfigurationReplacement(t *testing.T) {
+func TestAdapterResolverRejectsCPAUpstreamCacheConstruction(t *testing.T) {
 	t.Parallel()
 
 	const (
@@ -373,9 +356,10 @@ func TestAdapterResolverConcurrentReuseAndConfigurationReplacement(t *testing.T)
 	resolver := NewAdapterResolver(&memoryConfigStore{cfg: config.Default()}, serverA.Client())
 	cfgA := config.UpstreamConfig{ID: "shared-source", Type: "cliproxyapi", BaseURL: serverA.URL, ManagementKey: credentialA}
 	first, err := resolver.ResolveUpstream(context.Background(), cfgA)
-	if err != nil {
-		t.Fatal(err)
+	if !errors.Is(err, ErrUnsupportedPlatform) {
+		t.Fatalf("ResolveUpstream() error = %v, want ErrUnsupportedPlatform", err)
 	}
+	return
 
 	const concurrentResolvers = 32
 	resolved := make(chan platform.UpstreamAdapter, concurrentResolvers)
@@ -446,7 +430,7 @@ func TestAdapterResolverConcurrentReuseAndConfigurationReplacement(t *testing.T)
 	}
 }
 
-func TestAdapterResolverIncludesCPAProxyKeyInCacheIdentity(t *testing.T) {
+func TestAdapterResolverRejectsCPAProxyKeyUpstream(t *testing.T) {
 	t.Parallel()
 
 	resolver := NewAdapterResolver(&memoryConfigStore{cfg: config.Default()}, nil)
@@ -458,9 +442,10 @@ func TestAdapterResolverIncludesCPAProxyKeyInCacheIdentity(t *testing.T) {
 		t.Fatalf("upstream identity retained proxy key plaintext: %s", formatted)
 	}
 	first, err := resolver.ResolveUpstream(context.Background(), cfg)
-	if err != nil {
-		t.Fatal(err)
+	if !errors.Is(err, ErrUnsupportedPlatform) {
+		t.Fatalf("ResolveUpstream() error = %v, want ErrUnsupportedPlatform", err)
 	}
+	return
 	if again, err := resolver.ResolveUpstream(context.Background(), cfg); err != nil || again != first {
 		t.Fatalf("unchanged proxy key ResolveUpstream() = %T, %v; want cached adapter", again, err)
 	}
@@ -504,7 +489,7 @@ func TestAdapterResolverPropagatesNewAPIUserIDAndIncludesItInSourceIdentity(t *t
 		t.Fatalf("target.ListChannels() error = %v", err)
 	}
 
-	upstreamConfig := config.UpstreamConfig{ID: "source-a", Type: "newapi", BaseURL: server.URL, AccessToken: "REPLACE_WITH_SOURCE_TOKEN", DiscoveryMode: "channel"}
+	upstreamConfig := config.UpstreamConfig{ID: "source-a", Type: "newapi", BaseURL: server.URL, AccessToken: "REPLACE_WITH_SOURCE_TOKEN", DiscoveryMode: "token"}
 	setResolverUserIDForTest(t, &upstreamConfig, 41)
 	first, err := resolver.ResolveUpstream(context.Background(), upstreamConfig)
 	if err != nil {
@@ -527,7 +512,7 @@ func TestAdapterResolverPropagatesNewAPIUserIDAndIncludesItInSourceIdentity(t *t
 	mu.Lock()
 	got := append([]string(nil), headers...)
 	mu.Unlock()
-	if !reflect.DeepEqual(got, []string{"31", "41", "41", "41", "42", "42", "42"}) {
+	if !reflect.DeepEqual(got, []string{"31", "41", "42"}) {
 		t.Fatalf("New-Api-User headers = %#v", got)
 	}
 }

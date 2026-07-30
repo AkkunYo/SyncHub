@@ -21,7 +21,7 @@ import (
 
 const (
 	acceptanceUpstreamToken = "REPLACE_WITH_UPSTREAM_MANAGEMENT_TOKEN"
-	acceptanceAssetKey      = "REPLACE_WITH_UPSTREAM_ASSET_KEY"
+	acceptanceAssetKey      = "sk-REPLACE_WITH_UPSTREAM_ASSET_KEY"
 	acceptanceProof         = "REPLACE_WITH_SECURITY_PROOF"
 	acceptanceTargetAToken  = "REPLACE_WITH_TARGET_A_ACCESS_TOKEN"
 	acceptanceTargetBToken  = "REPLACE_WITH_TARGET_B_ACCESS_TOKEN"
@@ -280,22 +280,26 @@ func newAcceptanceUpstream(t *testing.T) *httptest.Server {
 		}
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/user/self":
-			writeAcceptanceJSON(w, map[string]any{"success": true, "data": map[string]any{"role": 100, "group": "default"}})
-		case r.Method == http.MethodGet && r.URL.Path == "/api/channel/" && r.URL.Query().Get("p") == "1":
+			writeAcceptanceJSON(w, map[string]any{"success": true, "data": map[string]any{"role": 1, "group": "default"}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/user/self/groups":
+			writeAcceptanceJSON(w, map[string]any{"success": true, "data": map[string]any{
+				"default": map[string]any{"ratio": 1, "description": "Default group"},
+			}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/token/" && r.URL.Query().Get("p") == "1":
 			writeAcceptanceJSON(w, map[string]any{
 				"success": true,
 				"data": map[string]any{
 					"items": []map[string]any{{
-						"id": 7, "type": 1, "name": "primary", "status": 1,
-						"base_url": "https://api.example.test", "models": "gpt-4.1",
-						"group": "default", "priority": 0, "weight": 100,
-						"channel_info": map[string]any{"is_multi_key": false},
+						"id": 7, "name": "primary", "status": 1, "group": "default",
+						"remain_quota": 1000, "unlimited_quota": false, "expired_time": -1,
 					}},
 					"total": 1, "page": 1, "page_size": 100,
 				},
 			})
-		case r.Method == http.MethodPost && r.URL.Path == "/api/channel/7/key" && r.Header.Get("X-Security-Proof") == acceptanceProof:
-			writeAcceptanceJSON(w, map[string]any{"success": true, "data": map[string]any{"key": acceptanceAssetKey}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/user/models" && r.URL.Query().Get("group") == "default":
+			writeAcceptanceJSON(w, map[string]any{"success": true, "data": []string{"gpt-4.1"}})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/token/batch/keys":
+			writeAcceptanceJSON(w, map[string]any{"success": true, "data": map[string]any{"keys": map[string]string{"7": acceptanceAssetKey}}})
 		default:
 			http.NotFound(w, r)
 		}
@@ -417,13 +421,13 @@ func TestSystemAcceptanceSyncReconcileAndChannelLifecycle(t *testing.T) {
 		{ID: "target-a", Name: "Target A", Type: "newapi", BaseURL: targetA.server.URL, AccessToken: acceptanceTargetAToken},
 		{ID: "target-b", Name: "Target B", Type: "newapi", BaseURL: targetB.server.URL, AccessToken: acceptanceTargetBToken},
 	}, []config.UpstreamConfig{{
-		ID: "source-a", Name: "Source A", Type: "newapi", BaseURL: upstream.URL, AccessToken: acceptanceUpstreamToken, DiscoveryMode: "channel",
+		ID: "source-a", Name: "Source A", Type: "newapi", BaseURL: upstream.URL, AccessToken: acceptanceUpstreamToken, DiscoveryMode: "token",
 	}})
 	router := newAcceptanceRouter(t, configPath)
 
 	refresh := acceptanceData(t, acceptanceRequest(t, router, http.MethodPost, "/api/v1/upstreams/source-a/refresh", nil, http.StatusOK))
 	assets := refresh["assets"].([]any)
-	if len(assets) != 1 || assets[0].(map[string]any)["id"] != "source-a:channel:7" || refresh["refreshed"] != true {
+	if len(assets) != 1 || assets[0].(map[string]any)["id"] != "source-a:token:7" || refresh["refreshed"] != true {
 		t.Fatalf("refresh data = %#v", refresh)
 	}
 	listed := acceptanceData(t, acceptanceRequest(t, router, http.MethodGet, "/api/v1/upstreams/source-a/assets", nil, http.StatusOK))
@@ -439,8 +443,8 @@ func TestSystemAcceptanceSyncReconcileAndChannelLifecycle(t *testing.T) {
 	syncEnvelope := acceptanceRequest(t, router, http.MethodPost, "/api/v1/sync", map[string]any{
 		"upstream_id": "source-a",
 		"units": []map[string]any{
-			{"unit_id": "u-a", "asset_id": "source-a:channel:7", "target_id": "target-a", "settings": map[string]any{"models": []string{"gpt-4.1"}, "target_group": "default", "priority": 0, "weight": 100}},
-			{"unit_id": "u-b", "asset_id": "source-a:channel:7", "target_id": "target-b", "settings": map[string]any{"models": []string{"gpt-4.1"}, "target_group": "default", "priority": 0, "weight": 100}},
+			{"unit_id": "u-a", "asset_id": "source-a:token:7", "target_id": "target-a", "upstream_group": "default", "settings": map[string]any{"models": []string{"gpt-4.1"}, "target_group": "default", "priority": 0, "weight": 100}},
+			{"unit_id": "u-b", "asset_id": "source-a:token:7", "target_id": "target-b", "upstream_group": "default", "settings": map[string]any{"models": []string{"gpt-4.1"}, "target_group": "default", "priority": 0, "weight": 100}},
 		},
 		"grant": map[string]any{"security_proof": acceptanceProof, "allow_auth_file": false},
 	}, http.StatusOK)
@@ -467,7 +471,7 @@ func TestSystemAcceptanceSyncReconcileAndChannelLifecycle(t *testing.T) {
 		t.Fatalf("drifted matrix cell = %#v", cell)
 	}
 	acceptanceRequest(t, router, http.MethodPost, "/api/v1/targets/target-a/drift/accept", map[string]any{
-		"upstream_asset_id": "source-a:channel:7", "channel_id": "101",
+		"upstream_asset_id": "source-a:token:7", "channel_id": "101",
 	}, http.StatusOK)
 	if got := acceptanceMappingsByTarget(t, configPath)["target-a"].Snapshot.Weight; got != 70 {
 		t.Fatalf("accepted snapshot weight = %d, want 70", got)
@@ -528,7 +532,7 @@ func TestSystemAcceptanceReconcilePaginationFailurePreservesMapping(t *testing.T
 		ID: "target-a", Name: "Target A", Type: "newapi", BaseURL: target.server.URL, AccessToken: acceptanceTargetAToken,
 	}}, []config.UpstreamConfig{{
 		ID: "source-a", Name: "Source A", Type: "newapi", BaseURL: target.server.URL,
-		AccessToken: acceptanceUpstreamToken, DiscoveryMode: "channel", SyncMappings: []config.SyncMapping{wantMapping},
+		AccessToken: acceptanceUpstreamToken, DiscoveryMode: "token", SyncMappings: []config.SyncMapping{wantMapping},
 	}})
 	router := newAcceptanceRouter(t, configPath)
 

@@ -123,11 +123,11 @@ func TestConfigurationSupportsPersistedCredentialVariants(t *testing.T) {
 		},
 		{
 			path: "/api/v1/upstreams",
-			body: `{"id":"source-new-key","name":"New API key source","type":"newapi","base_url":"https://new-source.example.com","api_key":"new-source-key"}`,
+			body: `{"id":"source-new-key","name":"New API token source","type":"newapi","base_url":"https://new-source.example.com","access_token":"new-source-key"}`,
 		},
 		{
 			path: "/api/v1/upstreams",
-			body: `{"id":"source-cpa-key","name":"CPA key source","type":"cliproxyapi","base_url":"https://cpa-source.example.com","api_key":"cpa-source-key"}`,
+			body: `{"id":"source-generic-key","name":"Generic key source","type":"generic","base_url":"https://generic-source.example.com/v1","api_key":"cpa-source-key"}`,
 		},
 	}
 	for _, item := range requests {
@@ -161,81 +161,8 @@ func TestConfigurationSupportsPersistedCredentialVariants(t *testing.T) {
 	if recorder.Code != http.StatusBadRequest || errorCode(t, envelope) != "invalid_request" {
 		t.Fatalf("CPA target api_key status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if upstream, ok := upstreamByID(env.store.cfg, "source-new-key"); !ok || upstream.AccessToken != "replacement-access" || upstream.APIKey != "new-source-key" {
+	if upstream, ok := upstreamByID(env.store.cfg, "source-new-key"); !ok || upstream.AccessToken != "replacement-access" || upstream.APIKey != "" {
 		t.Fatalf("upstream credential update = %#v, found=%v", upstream, ok)
-	}
-}
-
-func TestCPAProxyAPIKeyCRUDIsTriStateRestrictedAndRedacted(t *testing.T) {
-	env := newTestEnvironment()
-	router := env.router(t)
-
-	const (
-		managementKey = "REPLACE_WITH_CPA_MANAGEMENT_KEY"
-		proxyKey      = "REPLACE_WITH_CPA_PROXY_KEY"
-		replacement   = "REPLACE_WITH_CPA_PROXY_KEY_2"
-	)
-	create := `{"id":"source-cpa-proxy","name":"CPA Proxy","type":"cliproxyapi","base_url":"https://cpa.example.com","management_key":"` + managementKey + `","proxy_api_key":"` + proxyKey + `"}`
-	recorder, envelope := request(t, router, http.MethodPost, "/api/v1/upstreams", create, "application/json")
-	if recorder.Code != http.StatusCreated || envelope["success"] != true {
-		t.Fatalf("create CPA proxy upstream status=%d body=%s", recorder.Code, recorder.Body.String())
-	}
-	for _, forbidden := range []string{"proxy_api_key", managementKey, proxyKey} {
-		if strings.Contains(recorder.Body.String(), forbidden) {
-			t.Fatalf("create response leaked %q: %s", forbidden, recorder.Body.String())
-		}
-	}
-	created, ok := upstreamByID(env.store.cfg, "source-cpa-proxy")
-	if !ok || created.ManagementKey != managementKey || created.ProxyAPIKey != proxyKey {
-		t.Fatalf("stored CPA proxy upstream = %#v, found=%v", created, ok)
-	}
-
-	omit := `{"name":"CPA Proxy Renamed","base_url":"https://cpa.example.com/v1"}`
-	recorder, _ = request(t, router, http.MethodPut, "/api/v1/upstreams/source-cpa-proxy", omit, "application/json")
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("omitted proxy_api_key update status=%d body=%s", recorder.Code, recorder.Body.String())
-	}
-	if got, _ := upstreamByID(env.store.cfg, "source-cpa-proxy"); got.ProxyAPIKey != proxyKey {
-		t.Fatalf("omitted proxy_api_key changed value: %#v", got)
-	}
-
-	set := `{"name":"CPA Proxy Renamed","base_url":"https://cpa.example.com/v1","proxy_api_key":"` + replacement + `"}`
-	recorder, _ = request(t, router, http.MethodPut, "/api/v1/upstreams/source-cpa-proxy", set, "application/json")
-	if recorder.Code != http.StatusOK || strings.Contains(recorder.Body.String(), replacement) || strings.Contains(recorder.Body.String(), "proxy_api_key") {
-		t.Fatalf("set proxy_api_key status=%d body=%s", recorder.Code, recorder.Body.String())
-	}
-	if got, _ := upstreamByID(env.store.cfg, "source-cpa-proxy"); got.ProxyAPIKey != replacement {
-		t.Fatalf("replacement proxy_api_key not stored: %#v", got)
-	}
-
-	clear := `{"name":"CPA Proxy Renamed","base_url":"https://cpa.example.com/v1","proxy_api_key":""}`
-	recorder, _ = request(t, router, http.MethodPut, "/api/v1/upstreams/source-cpa-proxy", clear, "application/json")
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("clear proxy_api_key status=%d body=%s", recorder.Code, recorder.Body.String())
-	}
-	if got, _ := upstreamByID(env.store.cfg, "source-cpa-proxy"); got.ProxyAPIKey != "" || got.ManagementKey != managementKey {
-		t.Fatalf("cleared CPA credentials = %#v", got)
-	}
-
-	invalid := []struct {
-		method string
-		path   string
-		body   string
-	}{
-		{method: http.MethodPost, path: "/api/v1/upstreams", body: `{"id":"source-new-proxy","name":"New API","type":"newapi","base_url":"https://new.example.com","access_token":"token","proxy_api_key":"forbidden"}`},
-		{method: http.MethodPut, path: "/api/v1/upstreams/source-a", body: `{"name":"Source A","base_url":"https://source.example.com","proxy_api_key":"forbidden"}`},
-		{method: http.MethodPut, path: "/api/v1/upstreams/source-cpa-proxy", body: `{"name":"CPA Proxy","base_url":"https://cpa.example.com","proxy_api_key":null}`},
-	}
-	for _, item := range invalid {
-		recorder, envelope = request(t, router, item.method, item.path, item.body, "application/json")
-		if recorder.Code != http.StatusBadRequest || errorCode(t, envelope) != "invalid_request" {
-			t.Fatalf("invalid proxy_api_key %s %s status=%d body=%s", item.method, item.path, recorder.Code, recorder.Body.String())
-		}
-	}
-
-	recorder, _ = request(t, router, http.MethodGet, "/api/v1/config", "", "")
-	if strings.Contains(recorder.Body.String(), "proxy_api_key") || strings.Contains(recorder.Body.String(), proxyKey) || strings.Contains(recorder.Body.String(), replacement) {
-		t.Fatalf("config response leaked proxy key: %s", recorder.Body.String())
 	}
 }
 

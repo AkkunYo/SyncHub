@@ -65,8 +65,8 @@ func TestNewReleasesConfigLockWhenAssemblyFails(t *testing.T) {
 	const credentialCanary = "test-lock-secret-canary"
 	cfg := config.Default()
 	cfg.Upstreams = []config.UpstreamConfig{{
-		ID: "sub-source", Name: "Sub source", Type: "sub2api",
-		BaseURL: "https://sub.example.test/?marker=" + credentialCanary,
+		ID: "generic-source", Name: "Generic source", Type: "generic",
+		BaseURL: "https://generic.example.test/?marker=" + credentialCanary,
 		APIKey:  credentialCanary,
 	}}
 	path := createConfigPath(t, cfg)

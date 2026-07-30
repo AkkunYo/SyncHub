@@ -30,16 +30,14 @@ func TestValidateDefaultsDiscoveryModeToTokenForNewAPI(t *testing.T) {
 	}
 }
 
-func TestValidateAcceptsExplicitDiscoveryModes(t *testing.T) {
+func TestValidateAcceptsExplicitTokenDiscoveryMode(t *testing.T) {
 	t.Parallel()
 
-	for _, mode := range []string{DiscoveryModeAuto, DiscoveryModeChannel, DiscoveryModeToken} {
-		cfg := validTestConfig()
-		cfg.Upstreams[0] = newAPIUpstreamConfig()
-		cfg.Upstreams[0].DiscoveryMode = mode
-		if err := Validate(&cfg); err != nil {
-			t.Fatalf("Validate(%q) error = %v", mode, err)
-		}
+	cfg := validTestConfig()
+	cfg.Upstreams[0] = newAPIUpstreamConfig()
+	cfg.Upstreams[0].DiscoveryMode = DiscoveryModeToken
+	if err := Validate(&cfg); err != nil {
+		t.Fatalf("Validate(token) error = %v", err)
 	}
 }
 
@@ -72,7 +70,7 @@ func TestValidateRejectsDiscoveryModeOnNonNewAPIUpstream(t *testing.T) {
 	t.Parallel()
 
 	cfg := validTestConfig()
-	// Upstream 0 is sub2api by default.
+	// Upstream 0 is generic by default.
 	cfg.Upstreams[0].DiscoveryMode = DiscoveryModeToken
 	if err := Validate(&cfg); err == nil || !strings.Contains(err.Error(), "discovery_mode") {
 		t.Fatalf("Validate() error = %v, want discovery_mode error", err)
@@ -89,15 +87,15 @@ func TestValidateRejectsManageTokensOnNonNewAPIUpstream(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsManageTokensInChannelMode(t *testing.T) {
+func TestValidateRejectsRetiredChannelModeBeforeManageTokens(t *testing.T) {
 	t.Parallel()
 
 	cfg := validTestConfig()
 	cfg.Upstreams[0] = newAPIUpstreamConfig()
 	cfg.Upstreams[0].DiscoveryMode = DiscoveryModeChannel
 	cfg.Upstreams[0].ManageTokens = true
-	if err := Validate(&cfg); err == nil || !strings.Contains(err.Error(), "manage_tokens") {
-		t.Fatalf("Validate() error = %v, want manage_tokens error", err)
+	if err := Validate(&cfg); err == nil || !strings.Contains(err.Error(), "discovery_mode") {
+		t.Fatalf("Validate() error = %v, want discovery_mode error", err)
 	}
 }
 

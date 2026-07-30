@@ -92,54 +92,6 @@ upstreams:
 	}
 }
 
-func TestCPAProxyAPIKeyYAMLRoundTripAndPlatformValidation(t *testing.T) {
-	t.Parallel()
-
-	const proxyKey = "REPLACE_WITH_CPA_PROXY_KEY"
-	cfg := validTestConfig()
-	cfg.Upstreams[0] = UpstreamConfig{
-		ID: "source-cpa", Name: "CPA Source", Type: "cliproxyapi", BaseURL: "https://cpa.example.com",
-		ManagementKey: "REPLACE_WITH_CPA_MANAGEMENT_KEY", ProxyAPIKey: proxyKey,
-	}
-	if err := Validate(&cfg); err != nil {
-		t.Fatalf("Validate(CPA proxy key) error = %v", err)
-	}
-	encoded, err := yaml.Marshal(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(encoded), "proxy_api_key: "+proxyKey) {
-		t.Fatalf("marshaled config omitted proxy_api_key: %s", encoded)
-	}
-	var decoded Config
-	if err := yaml.Unmarshal(encoded, &decoded); err != nil {
-		t.Fatal(err)
-	}
-	if got := decoded.Upstreams[0].ProxyAPIKey; got != proxyKey {
-		t.Fatalf("decoded proxy_api_key = %q", got)
-	}
-
-	for _, upstreamType := range []string{"newapi", "sub2api"} {
-		invalid := validTestConfig()
-		invalid.Upstreams[0].Type = upstreamType
-		invalid.Upstreams[0].ProxyAPIKey = proxyKey
-		if upstreamType == "newapi" {
-			invalid.Upstreams[0].AccessToken = "REPLACE_WITH_NEW_API_TOKEN"
-		}
-		if err := Validate(&invalid); err == nil || !strings.Contains(err.Error(), "proxy_api_key") {
-			t.Fatalf("Validate(%s proxy_api_key) error = %v", upstreamType, err)
-		}
-	}
-
-	onlyProxy := validTestConfig()
-	onlyProxy.Upstreams[0] = UpstreamConfig{
-		ID: "source-cpa", Name: "CPA Source", Type: "cliproxyapi", BaseURL: "https://cpa.example.com", ProxyAPIKey: proxyKey,
-	}
-	if err := Validate(&onlyProxy); err == nil || !strings.Contains(err.Error(), "management_key") {
-		t.Fatalf("Validate(proxy key without management key) error = %v", err)
-	}
-}
-
 func setTestUserID(t *testing.T, value any, userID int) {
 	t.Helper()
 	field := reflect.ValueOf(value).Elem().FieldByName("UserID")
@@ -209,11 +161,7 @@ func TestValidateNormalizesURLsAndRejectsInvalidConfig(t *testing.T) {
 		{"unsupported target", func(c *Config) { c.Targets[0].Type = "sub2api" }, "type"},
 		{"unsupported upstream", func(c *Config) { c.Upstreams[0].Type = "mystery" }, "type"},
 		{"missing newapi token", func(c *Config) { c.Targets[0].AccessToken = "" }, "access_token"},
-		{"missing cpa management key", func(c *Config) {
-			c.Upstreams[0].Type = "cliproxyapi"
-			c.Upstreams[0].APIKey = ""
-			c.Upstreams[0].ManagementKey = ""
-		}, "management_key"},
+		{"missing generic api key", func(c *Config) { c.Upstreams[0].APIKey = "" }, "api_key"},
 		{"mapping references missing target", func(c *Config) {
 			c.Upstreams[0].SyncMappings = []SyncMapping{{
 				UpstreamAssetID: "source:key:1",
@@ -254,7 +202,7 @@ targets:
 upstreams:
   - id: source-1
     name: Source
-    type: sub2api
+    type: generic
     base_url: https://source.example.com/
     api_key: source-key
     sync_mappings:
@@ -497,7 +445,7 @@ func validTestConfig() Config {
 	cfg.Upstreams = []UpstreamConfig{{
 		ID:      "source-1",
 		Name:    "Source",
-		Type:    "sub2api",
+		Type:    "generic",
 		BaseURL: "https://source.example.com",
 		APIKey:  "source-key",
 	}}
@@ -522,7 +470,7 @@ targets:
 upstreams:
   - id: source-1
     name: Source
-    type: sub2api
+    type: generic
     base_url: https://source.example.com
     api_key: source-key
 %s`, "")

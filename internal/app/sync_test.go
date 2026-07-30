@@ -26,7 +26,7 @@ func TestSyncServiceBindsMappingsToSourceAndUsesRequestedConcurrency(t *testing.
 	}
 	for _, id := range []string{"source-a", "source-b"} {
 		cfg.Upstreams = append(cfg.Upstreams, config.UpstreamConfig{
-			ID: id, Name: id, Type: "sub2api", BaseURL: "https://source.example.test/" + id, APIKey: "test-admin-key",
+			ID: id, Name: id, Type: "generic", BaseURL: "https://source.example.test/" + id, APIKey: "test-shared-key",
 		})
 	}
 	path := createConfigPath(t, cfg)
@@ -45,15 +45,15 @@ func TestSyncServiceBindsMappingsToSourceAndUsesRequestedConcurrency(t *testing.
 			ID:      target.ID,
 			Adapter: &probeTarget{id: target.ID, probe: probe, delay: 25 * time.Millisecond},
 			Capabilities: platform.TargetCapabilities{Platform: "newapi", Providers: map[string]platform.ProviderCapability{
-				platform.ProviderOpenAI: {Modes: []platform.SyncMode{platform.SyncModeStaticKey}},
+				platform.ProviderOpenAI: {Modes: []platform.SyncMode{platform.SyncModeProxyEndpoint}},
 			}},
 		})
 	}
 	secretBytes := []byte("test-resolved-secret")
 	request := syncservice.BatchRequest{
 		Asset: platform.UpstreamAsset{
-			ID: "source-b:key:asset-1", SourceID: "source-b", SourceType: "sub2api", Provider: platform.ProviderOpenAI,
-			Kind: platform.AssetStaticAPIKey, Name: "test asset", Models: []string{"gpt-test"}, Enabled: true, SecretReadable: true,
+			ID: "source-b:endpoint", SourceID: "source-b", SourceType: "generic", Provider: platform.ProviderOpenAI, BaseURL: "https://source.example.test/source-b",
+			Kind: platform.AssetProxyKey, Name: "test asset", Models: []string{"gpt-test"}, Enabled: true, SecretReadable: true,
 		},
 		Source:   &fakeUpstream{secret: secretBytes},
 		Settings: platform.ChannelSettings{Models: []string{"gpt-test"}, Group: "default", Weight: 100},
@@ -121,7 +121,7 @@ func TestSyncServiceSyncUnitsBindsMappingsAndConcurrency(t *testing.T) {
 		ID: "target-a", Name: "target-a", Type: "newapi", BaseURL: "https://target.example.test", AccessToken: "test-console-token",
 	})
 	cfg.Upstreams = append(cfg.Upstreams, config.UpstreamConfig{
-		ID: "source-a", Name: "source-a", Type: "sub2api", BaseURL: "https://source.example.test", APIKey: "test-admin-key",
+		ID: "source-a", Name: "source-a", Type: "generic", BaseURL: "https://source.example.test", APIKey: "test-shared-key",
 	})
 	path := createConfigPath(t, cfg)
 	store, err := config.Open(path)
@@ -136,13 +136,13 @@ func TestSyncServiceSyncUnitsBindsMappingsAndConcurrency(t *testing.T) {
 		Units: []syncservice.UnitRequest{{
 			UnitID: "u-1",
 			Asset: platform.UpstreamAsset{
-				ID: "source-a:key:asset-1", SourceID: "source-a", SourceType: "sub2api", Provider: platform.ProviderOpenAI,
-				Kind: platform.AssetStaticAPIKey, Name: "asset", Models: []string{"gpt-test"}, Enabled: true, SecretReadable: true,
+				ID: "source-a:endpoint", SourceID: "source-a", SourceType: "generic", Provider: platform.ProviderOpenAI, BaseURL: "https://source.example.test",
+				Kind: platform.AssetProxyKey, Name: "asset", Models: []string{"gpt-test"}, Enabled: true, SecretReadable: true,
 			},
 			Target: syncservice.TargetRequest{
 				ID: "target-a", Adapter: &probeTarget{id: "target-a", probe: &concurrencyProbe{}},
 				Capabilities: platform.TargetCapabilities{Platform: "newapi", Providers: map[string]platform.ProviderCapability{
-					platform.ProviderOpenAI: {Modes: []platform.SyncMode{platform.SyncModeStaticKey}},
+					platform.ProviderOpenAI: {Modes: []platform.SyncMode{platform.SyncModeProxyEndpoint}},
 				}},
 			},
 			Settings: platform.ChannelSettings{Models: []string{"gpt-test"}, Group: "default", Weight: 100},
@@ -155,7 +155,7 @@ func TestSyncServiceSyncUnitsBindsMappingsAndConcurrency(t *testing.T) {
 	if len(result.Units) != 1 || result.Units[0].Status != syncservice.TargetSynced {
 		t.Fatalf("result = %#v", result)
 	}
-	if got := store.Snapshot().Upstreams[0].SyncMappings; len(got) != 1 || got[0].UpstreamAssetID != "source-a:key:asset-1" {
+	if got := store.Snapshot().Upstreams[0].SyncMappings; len(got) != 1 || got[0].UpstreamAssetID != "source-a:endpoint" {
 		t.Fatalf("mappings = %#v", got)
 	}
 	for i, value := range secretBytes {
@@ -170,7 +170,7 @@ type fakeUpstream struct {
 }
 
 func (f *fakeUpstream) Capabilities(context.Context) (platform.SourceCapabilities, error) {
-	return platform.SourceCapabilities{AssetKinds: []platform.AssetKind{platform.AssetStaticAPIKey}, SecretResolution: true}, nil
+	return platform.SourceCapabilities{AssetKinds: []platform.AssetKind{platform.AssetProxyKey}, SecretResolution: true}, nil
 }
 
 func (f *fakeUpstream) ListAssets(context.Context, platform.PageCursor) (platform.AssetPage, error) {
@@ -178,7 +178,7 @@ func (f *fakeUpstream) ListAssets(context.Context, platform.PageCursor) (platfor
 }
 
 func (f *fakeUpstream) ResolveSecret(context.Context, string, platform.SecretGrant) (platform.ResolvedSecret, error) {
-	return platform.ResolvedSecret{Kind: platform.AssetStaticAPIKey, Bytes: f.secret}, nil
+	return platform.ResolvedSecret{Kind: platform.AssetProxyKey, Bytes: f.secret}, nil
 }
 
 type concurrencyProbe struct {

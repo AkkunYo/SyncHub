@@ -33,7 +33,7 @@ func TestValidateAdditionalBoundaries(t *testing.T) {
 			c.Upstreams[0].APIKey = ""
 			c.Upstreams[0].AccessToken = ""
 		}, "access_token"},
-		{"upstream sub2api credential", func(c *Config) { c.Upstreams[0].APIKey = "" }, "api_key"},
+		{"upstream generic credential", func(c *Config) { c.Upstreams[0].APIKey = "" }, "api_key"},
 		{"non-http url", func(c *Config) { c.Targets[0].BaseURL = "ftp://target.example.com" }, "http"},
 		{"url user info", func(c *Config) { c.Targets[0].BaseURL = "https://user:pass@target.example.com" }, "user"},
 		{"missing mapping asset", func(c *Config) {

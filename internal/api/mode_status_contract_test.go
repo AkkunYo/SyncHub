@@ -54,13 +54,13 @@ func TestCreateAndUpdateNewAPIUpstreamDiscoverySettings(t *testing.T) {
 		t.Fatalf("created=%#v", created)
 	}
 
-	update := `{"name":"Source B","base_url":"https://source-b.example.com","discovery_mode":"auto","manage_tokens":false}`
+	update := `{"name":"Source B","base_url":"https://source-b.example.com","discovery_mode":"token","manage_tokens":false}`
 	recorder, envelope = request(t, router, http.MethodPut, "/api/v1/upstreams/source-b", update, "application/json")
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("update status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 	updated := dataObject(t, envelope)
-	if updated["discovery_mode"] != "auto" || updated["manage_tokens"] != false {
+	if updated["discovery_mode"] != "token" || updated["manage_tokens"] != false {
 		t.Fatalf("updated=%#v", updated)
 	}
 }
