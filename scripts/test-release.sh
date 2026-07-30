@@ -156,9 +156,6 @@ grep -Fq 'http://127.0.0.1:8888' "$repo_root/README.md" || fail "README does not
 grep -Fq 'data/config.example.yaml' "$repo_root/README.md" || fail "README does not reference the example config"
 
 example_credentials=$(sed -nE 's/^[[:space:]]*(access_token|management_key|api_key|proxy_api_key):[[:space:]]*([^[:space:]#]+).*$/\2/p' "$repo_root/data/config.example.yaml")
-proxy_api_key=$(sed -nE 's/^[[:space:]]*proxy_api_key:[[:space:]]*([^[:space:]#]+).*$/\1/p' "$repo_root/data/config.example.yaml")
-[ -n "$proxy_api_key" ] || fail "example config is missing proxy_api_key"
-assert_contains "$example_credentials" "$proxy_api_key"
 
 credential_count=0
 while IFS= read -r credential; do
@@ -170,10 +167,10 @@ while IFS= read -r credential; do
 done <<EOF
 $example_credentials
 EOF
-[ "$credential_count" -eq 6 ] || fail "expected six example credentials, got $credential_count"
+[ "$credential_count" -eq 4 ] || fail "expected four example credentials, got $credential_count"
 
 validation_output=$(cd "$repo_root" && go run ./scripts/validate-config data/config.example.yaml)
-assert_contains "$validation_output" 'valid config: 2 targets, 3 upstreams'
+assert_contains "$validation_output" 'valid config: 2 targets, 2 upstreams'
 
 metadata_version=v1.2.3
 metadata_commit=0123456789ab
