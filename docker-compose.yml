@@ -18,6 +18,12 @@ services:
       - /tmp:uid=10001,gid=10001,mode=1777
     security_opt:
       - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8888/api/v1/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
 
 volumes:
   synchub_data:

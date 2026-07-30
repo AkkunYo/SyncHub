@@ -46,6 +46,7 @@ assert_contains docker-compose.yml '127.0.0.1:8888:8888'
 assert_contains docker-compose.yml 'synchub_data:/data'
 assert_contains docker-compose.yml 'read_only: true'
 assert_contains docker-compose.yml 'no-new-privileges:true'
+assert_contains docker-compose.yml 'healthcheck:'
 assert_contains README.md 'docker compose up -d --build'
 
 compose_output=$(cd "$repo_root" && docker compose config)
