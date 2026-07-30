@@ -1,4 +1,4 @@
-.PHONY: build release frontend check validate-config test-release build-dry-run release-dry-run
+.PHONY: build release frontend check validate-config test-release test-docker build-dry-run release-dry-run
 
 build:
 	./scripts/build.sh
@@ -17,6 +17,9 @@ validate-config:
 
 test-release:
 	./scripts/test-release.sh
+
+test-docker:
+	./scripts/test-docker.sh
 
 build-dry-run:
 	DRY_RUN=1 VERSION=dev COMMIT=unknown BUILD_DATE=unknown ./scripts/build.sh
