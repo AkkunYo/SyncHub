@@ -30,11 +30,11 @@ const upstream = {
   sync_mappings: [],
 }
 
-const cpaUpstream = {
-  id: 'source-cpa',
-  name: 'CPA Source',
-  type: 'cliproxyapi',
-  base_url: 'https://cpa-source.invalid',
+const genericUpstream = {
+  id: 'source-generic',
+  name: 'Generic Source',
+  type: 'generic',
+  base_url: 'https://generic-source.invalid',
   sync_mappings: [],
 }
 
@@ -740,17 +740,22 @@ describe('SyncHub console', () => {
 
     await user.clear(userIdInput)
     await user.type(userIdInput, '17')
-    await user.selectOptions(within(dialog).getByLabelText('平台类型'), 'cliproxyapi')
+    await user.selectOptions(within(dialog).getByLabelText('平台类型'), 'generic')
     expect(within(dialog).queryByLabelText('New API 用户 ID')).not.toBeInTheDocument()
-    expect(within(dialog).getByLabelText('管理密钥')).toHaveValue('E2E_MANAGEMENT_KEY_PLACEHOLDER')
+    expect(within(dialog).getByLabelText('API Key')).toHaveValue('E2E_MANAGEMENT_KEY_PLACEHOLDER')
     await user.click(within(dialog).getByRole('button', { name: '保存上游实例' }))
 
     expect(await screen.findByText('Switched source')).toBeInTheDocument()
     const createCall = fetchMock.mock.calls.find(([input]) => String(input) === '/api/v1/upstreams')
-    expect(JSON.parse(String(createCall?.[1]?.body))).not.toHaveProperty('user_id')
+    const createBody = JSON.parse(String(createCall?.[1]?.body))
+    expect(createBody).toMatchObject({ type: 'generic', api_key: 'E2E_MANAGEMENT_KEY_PLACEHOLDER' })
+    expect(createBody).not.toHaveProperty('user_id')
+    expect(createBody).not.toHaveProperty('access_token')
+    expect(createBody).not.toHaveProperty('management_key')
   })
 
-  it('creates a CPA upstream with an optional proxy API key separate from its required management key', async () => {
+  it('creates and edits a generic upstream with only its URL and shared API key', async () => {
+    let updateBody: Record<string, unknown> | undefined
     const fetchMock = installFetch((url, init) => {
       if (url.pathname === '/api/v1/config') return envelope(config)
       if (url.pathname === '/api/v1/matrix') return envelope(matrix())
@@ -764,6 +769,10 @@ describe('SyncHub console', () => {
           sync_mappings: [],
         })
       }
+      if (url.pathname === '/api/v1/upstreams/source-generic' && init.method === 'PUT') {
+        updateBody = JSON.parse(String(init.body)) as Record<string, unknown>
+        return envelope({ ...genericUpstream, ...updateBody })
+      }
       throw new Error(`Unexpected request: ${init.method ?? 'GET'} ${url.pathname}`)
     })
     const user = userEvent.setup()
@@ -773,236 +782,48 @@ describe('SyncHub console', () => {
     await user.click(screen.getByRole('button', { name: '设置' }))
     await user.click(screen.getByRole('button', { name: '添加上游实例' }))
     const dialog = screen.getByRole('dialog', { name: '添加上游实例' })
-    await user.selectOptions(within(dialog).getByLabelText('平台类型'), 'cliproxyapi')
-    await user.type(within(dialog).getByLabelText('实例 ID'), 'source-cpa-proxy')
-    await user.type(within(dialog).getByLabelText('名称'), 'CPA proxy source')
-    await user.type(within(dialog).getByLabelText('Base URL'), 'https://cpa-proxy.invalid')
-    const proxyKey = within(dialog).getByLabelText('代理 API Key（可选）')
-    expect(proxyKey).toHaveAttribute('type', 'password')
-    expect(proxyKey).toHaveAttribute('autocomplete', 'off')
-    expect(within(dialog).queryByRole('checkbox', { name: '清除已保存的代理 API Key' })).not.toBeInTheDocument()
-    await user.type(proxyKey, 'CPA_PROXY_CREATE_PLACEHOLDER')
+    expect(within(dialog).getByRole('option', { name: 'New API' })).toBeInTheDocument()
+    expect(within(dialog).getByRole('option', { name: '通用 API' })).toBeInTheDocument()
+    expect(within(dialog).queryByRole('option', { name: 'CLIProxyAPI' })).not.toBeInTheDocument()
+    expect(within(dialog).queryByRole('option', { name: 'Sub2Api' })).not.toBeInTheDocument()
+    await user.selectOptions(within(dialog).getByLabelText('平台类型'), 'generic')
+    await user.type(within(dialog).getByLabelText('实例 ID'), 'source-generic')
+    await user.type(within(dialog).getByLabelText('名称'), 'Generic Source')
+    await user.type(within(dialog).getByLabelText('Base URL'), 'https://generic-source.invalid/')
+    const apiKey = within(dialog).getByLabelText('API Key')
+    expect(apiKey).toHaveAttribute('type', 'password')
+    expect(apiKey).toHaveAttribute('autocomplete', 'off')
+    expect(within(dialog).queryByLabelText('New API 用户 ID')).not.toBeInTheDocument()
+    expect(within(dialog).queryByLabelText('管理密钥')).not.toBeInTheDocument()
+    await user.type(apiKey, 'GENERIC_CREATE_KEY_PLACEHOLDER')
     await user.click(within(dialog).getByRole('button', { name: '保存上游实例' }))
-    expect(within(dialog).getByRole('alert')).toHaveTextContent('管理密钥不能为空')
-    expect(fetchMock.mock.calls.some(([input]) => String(input) === '/api/v1/upstreams')).toBe(false)
 
-    await user.type(within(dialog).getByLabelText('管理密钥'), 'CPA_MANAGEMENT_CREATE_PLACEHOLDER')
-    await user.click(within(dialog).getByRole('button', { name: '保存上游实例' }))
-
-    expect(await screen.findByText('CPA proxy source')).toBeInTheDocument()
+    expect(await screen.findByText('Generic Source')).toBeInTheDocument()
     const createCall = fetchMock.mock.calls.find(([input]) => String(input) === '/api/v1/upstreams')
-    expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
-      management_key: 'CPA_MANAGEMENT_CREATE_PLACEHOLDER',
-      proxy_api_key: 'CPA_PROXY_CREATE_PLACEHOLDER',
+    expect(JSON.parse(String(createCall?.[1]?.body))).toEqual({
+      id: 'source-generic',
+      name: 'Generic Source',
+      type: 'generic',
+      base_url: 'https://generic-source.invalid',
+      api_key: 'GENERIC_CREATE_KEY_PLACEHOLDER',
     })
-    expect(document.body).not.toHaveTextContent('CPA_PROXY_CREATE_PLACEHOLDER')
-    expect(document.body).not.toHaveTextContent('CPA_MANAGEMENT_CREATE_PLACEHOLDER')
+    expect(document.body).not.toHaveTextContent('GENERIC_CREATE_KEY_PLACEHOLDER')
     expect(window.localStorage).toHaveLength(0)
     expect(window.sessionStorage).toHaveLength(0)
 
-    await user.click(screen.getByRole('button', { name: '添加上游实例' }))
-    const optionalDialog = screen.getByRole('dialog', { name: '添加上游实例' })
-    await user.selectOptions(within(optionalDialog).getByLabelText('平台类型'), 'cliproxyapi')
-    await user.type(within(optionalDialog).getByLabelText('实例 ID'), 'source-cpa-management-only')
-    await user.type(within(optionalDialog).getByLabelText('名称'), 'CPA management-only source')
-    await user.type(within(optionalDialog).getByLabelText('Base URL'), 'https://cpa-management.invalid')
-    await user.type(within(optionalDialog).getByLabelText('管理密钥'), 'CPA_MANAGEMENT_ONLY_PLACEHOLDER')
-    await user.click(within(optionalDialog).getByRole('button', { name: '保存上游实例' }))
-
-    const createCalls = fetchMock.mock.calls.filter(([input]) => String(input) === '/api/v1/upstreams')
-    expect(JSON.parse(String(createCalls[1]?.[1]?.body))).not.toHaveProperty('proxy_api_key')
-  })
-
-  it('preserves the stored CPA proxy API key when its edit field remains blank', async () => {
-    let updateBody: Record<string, unknown> | undefined
-    installFetch((url, init) => {
-      if (url.pathname === '/api/v1/config') {
-        return envelope({ ...config, upstreams: [upstream, cpaUpstream] })
-      }
-      if (url.pathname === '/api/v1/matrix') return envelope(matrix())
-      if (url.pathname === '/api/v1/upstreams/source-cpa' && init.method === 'PUT') {
-        updateBody = JSON.parse(String(init.body)) as Record<string, unknown>
-        return envelope({ ...cpaUpstream, name: updateBody.name, base_url: updateBody.base_url })
-      }
-      throw new Error(`Unexpected request: ${init.method ?? 'GET'} ${url.pathname}`)
-    })
-    const user = userEvent.setup()
-    renderApp()
-
-    await screen.findByText('OpenAI primary')
-    await user.click(screen.getByRole('button', { name: '设置' }))
-    await user.click(screen.getByRole('button', { name: '编辑上游实例 CPA Source' }))
-    const dialog = screen.getByRole('dialog', { name: '编辑上游实例' })
-    expect(within(dialog).getByLabelText('代理 API Key（可选）')).toHaveValue('')
-    expect(within(dialog).getByRole('checkbox', { name: '清除已保存的代理 API Key' })).not.toBeChecked()
-    await user.click(within(dialog).getByRole('button', { name: '保存上游实例' }))
+    await user.click(screen.getByRole('button', { name: '编辑上游实例 Generic Source' }))
+    const editDialog = screen.getByRole('dialog', { name: '编辑上游实例' })
+    expect(within(editDialog).getByLabelText('API Key')).toHaveValue('')
+    await user.type(within(editDialog).getByLabelText('API Key'), 'GENERIC_REPLACE_KEY_PLACEHOLDER')
+    await user.click(within(editDialog).getByRole('button', { name: '保存上游实例' }))
 
     await waitFor(() => expect(updateBody).toBeDefined())
-    expect(updateBody).not.toHaveProperty('proxy_api_key')
-    expect(updateBody).not.toHaveProperty('management_key')
-  })
-
-  it('replaces the stored CPA proxy API key without changing the management key', async () => {
-    let updateBody: Record<string, unknown> | undefined
-    installFetch((url, init) => {
-      if (url.pathname === '/api/v1/config') {
-        return envelope({ ...config, upstreams: [upstream, cpaUpstream] })
-      }
-      if (url.pathname === '/api/v1/matrix') return envelope(matrix())
-      if (url.pathname === '/api/v1/upstreams/source-cpa' && init.method === 'PUT') {
-        updateBody = JSON.parse(String(init.body)) as Record<string, unknown>
-        return envelope(cpaUpstream)
-      }
-      throw new Error(`Unexpected request: ${init.method ?? 'GET'} ${url.pathname}`)
+    expect(updateBody).toEqual({
+      name: 'Generic Source',
+      base_url: 'https://generic-source.invalid',
+      api_key: 'GENERIC_REPLACE_KEY_PLACEHOLDER',
     })
-    const user = userEvent.setup()
-    renderApp()
-
-    await screen.findByText('OpenAI primary')
-    await user.click(screen.getByRole('button', { name: '设置' }))
-    await user.click(screen.getByRole('button', { name: '编辑上游实例 CPA Source' }))
-    const dialog = screen.getByRole('dialog', { name: '编辑上游实例' })
-    await user.type(within(dialog).getByLabelText('代理 API Key（可选）'), 'CPA_PROXY_REPLACE_PLACEHOLDER')
-    await user.click(within(dialog).getByRole('button', { name: '保存上游实例' }))
-
-    await waitFor(() => expect(updateBody).toMatchObject({ proxy_api_key: 'CPA_PROXY_REPLACE_PLACEHOLDER' }))
-    expect(updateBody).not.toHaveProperty('management_key')
-  })
-
-  it('explicitly clears a CPA proxy API key without sending a replacement value', async () => {
-    let updateBody: Record<string, unknown> | undefined
-    installFetch((url, init) => {
-      if (url.pathname === '/api/v1/config') {
-        return envelope({ ...config, upstreams: [upstream, cpaUpstream] })
-      }
-      if (url.pathname === '/api/v1/matrix') return envelope(matrix())
-      if (url.pathname === '/api/v1/upstreams/source-cpa' && init.method === 'PUT') {
-        updateBody = JSON.parse(String(init.body)) as Record<string, unknown>
-        return envelope(cpaUpstream)
-      }
-      throw new Error(`Unexpected request: ${init.method ?? 'GET'} ${url.pathname}`)
-    })
-    const user = userEvent.setup()
-    renderApp()
-
-    await screen.findByText('OpenAI primary')
-    await user.click(screen.getByRole('button', { name: '设置' }))
-    await user.click(screen.getByRole('button', { name: '编辑上游实例 CPA Source' }))
-    const dialog = screen.getByRole('dialog', { name: '编辑上游实例' })
-    const proxyKey = within(dialog).getByLabelText('代理 API Key（可选）')
-    await user.type(proxyKey, 'CPA_PROXY_MUST_NOT_SEND_PLACEHOLDER')
-    await user.click(within(dialog).getByRole('checkbox', { name: '清除已保存的代理 API Key' }))
-    expect(proxyKey).toBeDisabled()
-    expect(proxyKey).toHaveValue('')
-    await user.click(within(dialog).getByRole('button', { name: '保存上游实例' }))
-
-    await waitFor(() => expect(updateBody).toMatchObject({ proxy_api_key: '' }))
-    expect(JSON.stringify(updateBody)).not.toContain('CPA_PROXY_MUST_NOT_SEND_PLACEHOLDER')
-  })
-
-  it('hides and omits the CPA proxy secret for other platforms and target instances', async () => {
-    const fetchMock = installFetch((url, init) => {
-      if (url.pathname === '/api/v1/config') return envelope(config)
-      if (url.pathname === '/api/v1/matrix') return envelope(matrix())
-      if (url.pathname === '/api/v1/upstreams' && init.method === 'POST') {
-        const body = JSON.parse(String(init.body)) as Record<string, unknown>
-        return envelope({ id: body.id, name: body.name, type: body.type, base_url: body.base_url, sync_mappings: [] })
-      }
-      if (url.pathname === '/api/v1/targets' && init.method === 'POST') {
-        const body = JSON.parse(String(init.body)) as Record<string, unknown>
-        return envelope({ id: body.id, name: body.name, type: body.type, base_url: body.base_url })
-      }
-      throw new Error(`Unexpected request: ${init.method ?? 'GET'} ${url.pathname}`)
-    })
-    const user = userEvent.setup()
-    renderApp()
-
-    await screen.findByText('OpenAI primary')
-    await user.click(screen.getByRole('button', { name: '设置' }))
-    await user.click(screen.getByRole('button', { name: '添加上游实例' }))
-    const upstreamDialog = screen.getByRole('dialog', { name: '添加上游实例' })
-    expect(within(upstreamDialog).queryByLabelText('代理 API Key（可选）')).not.toBeInTheDocument()
-    await user.selectOptions(within(upstreamDialog).getByLabelText('平台类型'), 'cliproxyapi')
-    await user.type(within(upstreamDialog).getByLabelText('代理 API Key（可选）'), 'CPA_PROXY_SWITCH_PLACEHOLDER')
-    await user.selectOptions(within(upstreamDialog).getByLabelText('平台类型'), 'sub2api')
-    expect(within(upstreamDialog).queryByLabelText('代理 API Key（可选）')).not.toBeInTheDocument()
-    await user.type(within(upstreamDialog).getByLabelText('实例 ID'), 'source-sub2')
-    await user.type(within(upstreamDialog).getByLabelText('名称'), 'Sub2 source')
-    await user.type(within(upstreamDialog).getByLabelText('Base URL'), 'https://sub2.invalid')
-    await user.type(within(upstreamDialog).getByLabelText('API Key'), 'SUB2_API_KEY_PLACEHOLDER')
-    await user.click(within(upstreamDialog).getByRole('button', { name: '保存上游实例' }))
-
-    await user.click(screen.getByRole('button', { name: '添加目标实例' }))
-    const targetDialog = screen.getByRole('dialog', { name: '添加目标实例' })
-    await user.selectOptions(within(targetDialog).getByLabelText('平台类型'), 'cliproxyapi')
-    expect(within(targetDialog).queryByLabelText('代理 API Key（可选）')).not.toBeInTheDocument()
-    await user.type(within(targetDialog).getByLabelText('实例 ID'), 'target-cpa-new')
-    await user.type(within(targetDialog).getByLabelText('名称'), 'CPA target new')
-    await user.type(within(targetDialog).getByLabelText('Base URL'), 'https://cpa-target.invalid')
-    await user.type(within(targetDialog).getByLabelText('管理密钥'), 'CPA_TARGET_MANAGEMENT_PLACEHOLDER')
-    await user.click(within(targetDialog).getByRole('button', { name: '保存目标实例' }))
-
-    const upstreamCall = fetchMock.mock.calls.find(([input]) => String(input) === '/api/v1/upstreams')
-    const targetCall = fetchMock.mock.calls.find(([input]) => String(input) === '/api/v1/targets')
-    expect(JSON.parse(String(upstreamCall?.[1]?.body))).not.toHaveProperty('proxy_api_key')
-    expect(JSON.parse(String(targetCall?.[1]?.body))).not.toHaveProperty('proxy_api_key')
-    expect(JSON.stringify(upstreamCall?.[1]?.body)).not.toContain('CPA_PROXY_SWITCH_PLACEHOLDER')
-  })
-
-  it('clears CPA proxy secret state after failures and whenever the form closes', async () => {
-    const fetchMock = installFetch((url, init) => {
-      if (url.pathname === '/api/v1/config') {
-        return envelope({ ...config, upstreams: [upstream, cpaUpstream] })
-      }
-      if (url.pathname === '/api/v1/matrix') return envelope(matrix())
-      if (url.pathname === '/api/v1/upstreams/source-cpa' && init.method === 'PUT') {
-        return failure('invalid_request', '上游配置无效')
-      }
-      throw new Error(`Unexpected request: ${init.method ?? 'GET'} ${url.pathname}`)
-    })
-    const logSpy = vi.spyOn(console, 'log')
-    const errorSpy = vi.spyOn(console, 'error')
-    const user = userEvent.setup()
-    renderApp()
-
-    await screen.findByText('OpenAI primary')
-    await user.click(screen.getByRole('button', { name: '设置' }))
-    await user.click(screen.getByRole('button', { name: '编辑上游实例 CPA Source' }))
-    let dialog = screen.getByRole('dialog', { name: '编辑上游实例' })
-    const managementKey = within(dialog).getByLabelText('管理密钥')
-    const proxyKey = within(dialog).getByLabelText('代理 API Key（可选）')
-    await user.type(managementKey, 'CPA_MANAGEMENT_FAILURE_PLACEHOLDER')
-    await user.type(proxyKey, 'CPA_PROXY_FAILURE_PLACEHOLDER')
-    await user.click(within(dialog).getByRole('button', { name: '保存上游实例' }))
-
-    expect(await within(dialog).findByRole('alert')).toHaveTextContent('上游配置无效')
-    expect(managementKey).toHaveValue('')
-    expect(proxyKey).toHaveValue('')
-    expect(within(dialog).getByRole('checkbox', { name: '清除已保存的代理 API Key' })).not.toBeChecked()
-    expect(document.body).not.toHaveTextContent('CPA_PROXY_FAILURE_PLACEHOLDER')
-    expect(window.localStorage).toHaveLength(0)
-    expect(window.sessionStorage).toHaveLength(0)
-    expect(window.location.href).not.toContain('CPA_PROXY_FAILURE_PLACEHOLDER')
-    expect(logSpy).not.toHaveBeenCalled()
-    expect(errorSpy).not.toHaveBeenCalled()
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/v1/upstreams/source-cpa',
-      expect.objectContaining({ method: 'PUT' }),
-    )
-
-    await user.type(proxyKey, 'CPA_PROXY_CLOSE_PLACEHOLDER')
-    await user.click(within(dialog).getByRole('button', { name: '取消' }))
-    await user.click(screen.getByRole('button', { name: '编辑上游实例 CPA Source' }))
-    dialog = screen.getByRole('dialog', { name: '编辑上游实例' })
-    expect(within(dialog).getByLabelText('代理 API Key（可选）')).toHaveValue('')
-    expect(within(dialog).getByRole('checkbox', { name: '清除已保存的代理 API Key' })).not.toBeChecked()
-
-    await user.click(within(dialog).getByRole('checkbox', { name: '清除已保存的代理 API Key' }))
-    await user.click(within(dialog).getByRole('button', { name: '取消' }))
-    await user.click(screen.getByRole('button', { name: '编辑上游实例 CPA Source' }))
-    dialog = screen.getByRole('dialog', { name: '编辑上游实例' })
-    expect(within(dialog).getByLabelText('代理 API Key（可选）')).toHaveValue('')
-    expect(within(dialog).getByRole('checkbox', { name: '清除已保存的代理 API Key' })).not.toBeChecked()
+    expect(document.body).not.toHaveTextContent('GENERIC_REPLACE_KEY_PLACEHOLDER')
   })
 
   it('opens and closes the narrow-screen navigation after selecting a page', async () => {
@@ -1150,11 +971,11 @@ describe('SyncHub console', () => {
     await user.click(screen.getByRole('button', { name: '设置' }))
     await user.click(screen.getByRole('button', { name: '添加上游实例' }))
     const addDialog = screen.getByRole('dialog', { name: '添加上游实例' })
-    await user.type(within(addDialog).getByLabelText('实例 ID'), 'source-cpa')
+    await user.type(within(addDialog).getByLabelText('实例 ID'), 'source-generic-crud')
     await user.type(within(addDialog).getByLabelText('名称'), 'Source Gamma')
-    await user.selectOptions(within(addDialog).getByLabelText('平台类型'), 'cliproxyapi')
-    await user.type(within(addDialog).getByLabelText('Base URL'), 'https://source-cpa.invalid/')
-    await user.type(within(addDialog).getByLabelText('管理密钥'), 'temporary-form-value')
+    await user.selectOptions(within(addDialog).getByLabelText('平台类型'), 'generic')
+    await user.type(within(addDialog).getByLabelText('Base URL'), 'https://source-generic.invalid/')
+    await user.type(within(addDialog).getByLabelText('API Key'), 'temporary-form-value')
     await user.click(within(addDialog).getByRole('button', { name: '保存上游实例' }))
     expect(await screen.findByText('Source Gamma')).toBeInTheDocument()
 
@@ -1178,10 +999,10 @@ describe('SyncHub console', () => {
 
     const createCall = fetchMock.mock.calls.find(([input]) => String(input) === '/api/v1/upstreams')
     expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
-      id: 'source-cpa',
-      type: 'cliproxyapi',
-      base_url: 'https://source-cpa.invalid',
-      management_key: 'temporary-form-value',
+      id: 'source-generic-crud',
+      type: 'generic',
+      base_url: 'https://source-generic.invalid',
+      api_key: 'temporary-form-value',
     })
     expect(window.localStorage).toHaveLength(0)
   })
