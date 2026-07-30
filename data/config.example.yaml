@@ -30,21 +30,12 @@ upstreams:
     access_token: REPLACE_WITH_NEW_API_SOURCE_USER_ACCESS_TOKEN
     # Numeric dashboard user ID for legacy sessions; omit when using a PAT.
     user_id: 1
-    discovery_mode: token
     sync_mappings: []
 
-  - id: upstream-cpa-main
-    name: CLIProxyAPI Source
-    type: cliproxyapi
-    base_url: https://cpa-source.example.com
-    management_key: REPLACE_WITH_CPA_SOURCE_MANAGEMENT_KEY
-    # Optional key accepted by the CPA proxy endpoint for model requests.
-    proxy_api_key: REPLACE_WITH_CPA_PROXY_API_KEY
-    sync_mappings: []
-
-  - id: upstream-sub2api-main
-    name: Sub2Api Source
-    type: sub2api
-    base_url: https://sub2api-source.example.com
-    api_key: REPLACE_WITH_SUB2API_ADMIN_API_KEY
+  - id: upstream-generic-main
+    name: OpenAI-Compatible Source
+    type: generic
+    base_url: https://provider.example.com
+    # Shared model API key; no upstream login or management access is used.
+    api_key: REPLACE_WITH_SHARED_MODEL_API_KEY
     sync_mappings: []
