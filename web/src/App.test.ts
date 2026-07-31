@@ -164,6 +164,8 @@ describe('SyncHub console', () => {
     const topbar = await screen.findByRole('banner', { name: 'SyncHub 控制台顶栏' })
     expect(within(topbar).getByText('同步工作台')).toBeInTheDocument()
     expect(within(topbar).getByText('资产矩阵')).toBeInTheDocument()
+    expect(within(topbar).getByText('本地管理')).toBeInTheDocument()
+    expect(within(topbar).queryByText('服务在线')).not.toBeInTheDocument()
     expect(screen.getByText('工作区')).toBeInTheDocument()
     expect(screen.getByText('运行状态')).toBeInTheDocument()
     expect(screen.getByRole('navigation', { name: '主导航' })).toBeInTheDocument()
