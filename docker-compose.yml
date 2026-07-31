@@ -3,9 +3,9 @@ services:
     build:
       context: .
       args:
-        VERSION: ${VERSION:-docker-local}
-        COMMIT: ${COMMIT:-local}
-        BUILD_DATE: ${BUILD_DATE:-unknown}
+        VERSION: ${VERSION:-}
+        COMMIT: ${COMMIT:-}
+        BUILD_DATE: ${BUILD_DATE:-}
     image: synchub:local
     user: "0:0"
     ports:
