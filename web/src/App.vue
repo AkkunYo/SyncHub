@@ -29,6 +29,9 @@ const navItems = [
 ]
 
 const driftCount = computed(() => store.driftItems.length)
+const activeNavLabel = computed(
+  () => navItems.find((item) => item.id === store.activeView)?.label ?? '资产矩阵',
+)
 
 function formattedBuildDate(value: string): string {
   const match = value.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})/)
@@ -79,11 +82,42 @@ onUnmounted(() => {
   </div>
 
   <div v-else class="app-shell">
-    <aside class="desktop-sidebar">
-      <div class="brand-block">
-        <span class="brand-mark"><GitCompareArrows :size="19" aria-hidden="true" /></span>
-        <div><strong>SyncHub</strong><span>管理控制台</span></div>
+    <header class="app-header" aria-label="SyncHub 控制台顶栏">
+      <button
+        ref="mobileMenuButton"
+        class="icon-button mobile-menu-button"
+        type="button"
+        :aria-label="mobileNavOpen ? '关闭导航' : '打开导航'"
+        :title="mobileNavOpen ? '关闭导航' : '打开导航'"
+        :aria-expanded="mobileNavOpen"
+        @click="mobileNavOpen = !mobileNavOpen"
+      >
+        <PanelLeftClose v-if="mobileNavOpen" :size="19" aria-hidden="true" />
+        <Menu v-else :size="19" aria-hidden="true" />
+      </button>
+
+      <div class="topbar-brand">
+        <span class="brand-mark"><GitCompareArrows :size="18" aria-hidden="true" /></span>
+        <strong>SyncHub</strong>
       </div>
+
+      <div class="topbar-context">
+        <span>同步工作台</span>
+        <strong>{{ activeNavLabel }}</strong>
+      </div>
+
+      <div class="topbar-health" aria-label="本地管理 API 运行正常">
+        <span class="health-dot" aria-hidden="true"></span>
+        <span>服务在线</span>
+      </div>
+    </header>
+
+    <aside class="desktop-sidebar">
+      <div class="sidebar-intro">
+        <span>管理控制台</span>
+        <strong>资源同步中心</strong>
+      </div>
+      <p class="nav-section-label">工作区</p>
       <nav class="side-nav" aria-label="主导航">
         <button
           v-for="item in navItems"
@@ -101,32 +135,13 @@ onUnmounted(() => {
       <div class="sidebar-status">
         <span class="health-dot" aria-hidden="true"></span>
         <div>
-          <span>本地管理 API</span>
+          <span class="status-label">运行状态</span>
+          <strong>本地管理 API</strong>
           <small v-if="store.runtimeInfo">版本 {{ store.runtimeInfo.version }}</small>
           <small v-if="store.runtimeInfo">编译 {{ formattedBuildDate(store.runtimeInfo.build_date) }}</small>
         </div>
       </div>
     </aside>
-
-    <header class="mobile-header">
-      <button
-        ref="mobileMenuButton"
-        class="icon-button mobile-menu-button"
-        type="button"
-        :aria-label="mobileNavOpen ? '关闭导航' : '打开导航'"
-        :title="mobileNavOpen ? '关闭导航' : '打开导航'"
-        :aria-expanded="mobileNavOpen"
-        @click="mobileNavOpen = !mobileNavOpen"
-      >
-        <PanelLeftClose v-if="mobileNavOpen" :size="19" aria-hidden="true" />
-        <Menu v-else :size="19" aria-hidden="true" />
-      </button>
-      <div class="mobile-brand">
-        <span class="brand-mark"><GitCompareArrows :size="17" aria-hidden="true" /></span>
-        <strong>SyncHub</strong>
-      </div>
-      <span class="mobile-context">{{ navItems.find((item) => item.id === store.activeView)?.label }}</span>
-    </header>
 
     <template v-if="mobileNavOpen">
       <button class="nav-scrim" type="button" aria-label="关闭导航" @click="mobileNavOpen = false"></button>
