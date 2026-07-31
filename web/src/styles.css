@@ -69,7 +69,7 @@ input:focus-visible,
 select:focus-visible,
 a:focus-visible,
 [tabindex]:focus-visible {
-  outline: 3px solid rgba(40, 95, 157, 0.3);
+  outline: 2px solid #2563eb;
   outline-offset: 2px;
 }
 
@@ -215,11 +215,11 @@ h3 {
   align-items: center;
   gap: 7px;
   margin-left: auto;
-  border: 1px solid #d1fae5;
+  border: 1px solid var(--line);
   border-radius: 999px;
   padding: 5px 10px;
-  color: #047857;
-  background: #f0fdf4;
+  color: #52525b;
+  background: var(--surface-subtle);
   font-size: 11px;
   font-weight: 650;
 }
@@ -251,7 +251,7 @@ h3 {
 
 .sidebar-intro span,
 .nav-section-label {
-  color: #a1a1aa;
+  color: #52525b;
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -356,7 +356,7 @@ h3 {
 }
 
 .sidebar-status .status-label {
-  color: #a1a1aa;
+  color: #52525b;
   font-size: 9px;
   font-weight: 750;
   letter-spacing: 0.06em;
@@ -526,8 +526,9 @@ input[type="url"]:focus,
 input[type="password"]:focus,
 input[type="number"]:focus,
 select:focus {
-  border-color: #93c5fd;
-  outline: none;
+  border-color: #2563eb;
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
 }
 

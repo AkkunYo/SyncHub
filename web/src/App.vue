@@ -106,9 +106,8 @@ onUnmounted(() => {
         <strong>{{ activeNavLabel }}</strong>
       </div>
 
-      <div class="topbar-health" aria-label="本地管理 API 运行正常">
-        <span class="health-dot" aria-hidden="true"></span>
-        <span>服务在线</span>
+      <div class="topbar-health" aria-label="本地管理 API">
+        <span>本地管理</span>
       </div>
     </header>
 
