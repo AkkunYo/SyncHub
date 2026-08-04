@@ -205,6 +205,30 @@ describe('SyncHub console', () => {
     expect(within(navigation).getByRole('link', { name: '漂移修复' })).toHaveAttribute('aria-current', 'page')
   })
 
+  it('keeps every documented detail URL addressable', async () => {
+    installConsoleApi()
+    const { router } = renderApp()
+
+    await screen.findByText('OpenAI primary')
+    const destinations = [
+      { path: '/upstreams/source-a', heading: '上游详情', navigation: '上游连接' },
+      { path: '/targets/target-a', heading: '目标概览', navigation: '目标实例' },
+      { path: '/drift/finding-a', heading: '漂移详情', navigation: '漂移修复' },
+      { path: '/tasks/task-a', heading: '任务详情', navigation: '任务记录' },
+    ] as const
+
+    for (const destination of destinations) {
+      await router.push(destination.path)
+      expect(window.location.pathname).toBe(destination.path)
+      expect(screen.getByRole('heading', { name: destination.heading })).toBeInTheDocument()
+      expect(
+        within(screen.getByRole('navigation', { name: '主导航' }))
+          .getByRole('link', { name: destination.navigation }),
+      ).toHaveAttribute('aria-current', 'page')
+      expect(document.title).toBe(`${destination.heading} | SyncHub`)
+    }
+  })
+
   it('loads the target selected by a direct channel route', async () => {
     const fetchMock = installFetch((url) => {
       if (url.pathname === '/api/v1/health') {
@@ -258,7 +282,7 @@ describe('SyncHub console', () => {
     const topbar = await screen.findByRole('banner', { name: 'SyncHub 控制台顶栏' })
     expect(within(topbar).getByText('SyncHub')).toBeInTheDocument()
     expect(within(topbar).getByLabelText('本地管理 API')).toHaveTextContent('最近检查正常')
-    expect(within(topbar).queryByText('同步工作台')).not.toBeInTheDocument()
+    expect(within(topbar).getByText('同步工作台')).toBeInTheDocument()
 
     const navigation = screen.getByRole('navigation', { name: '主导航' })
     const main = screen.getByRole('main')
@@ -272,6 +296,7 @@ describe('SyncHub console', () => {
         const pageHeadings = within(main).getAllByRole('heading', { level: 1 })
         expect(pageHeadings).toHaveLength(1)
         expect(pageHeadings[0]).toHaveTextContent(heading)
+        expect(within(topbar).getByText(navigationLabel)).toBeInTheDocument()
       })
     }
 
