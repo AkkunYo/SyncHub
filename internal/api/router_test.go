@@ -1223,6 +1223,10 @@ func cloneConfig(cfg config.Config) config.Config {
 	cloned.Targets = append([]config.TargetConfig(nil), cfg.Targets...)
 	cloned.Upstreams = append([]config.UpstreamConfig(nil), cfg.Upstreams...)
 	for i := range cloned.Upstreams {
+		cloned.Upstreams[i].Keys = append([]config.GenericKeyConfig(nil), cfg.Upstreams[i].Keys...)
+		for j := range cloned.Upstreams[i].Keys {
+			cloned.Upstreams[i].Keys[j].Models = append([]string(nil), cfg.Upstreams[i].Keys[j].Models...)
+		}
 		cloned.Upstreams[i].SyncMappings = cloneMappings(cfg.Upstreams[i].SyncMappings)
 	}
 	return cloned
