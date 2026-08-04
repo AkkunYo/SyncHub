@@ -227,6 +227,51 @@ func TestProbeParsesRetryAfter(t *testing.T) {
 	}
 }
 
+func TestProbeStatusValuesMatchV2APIContract(t *testing.T) {
+	t.Parallel()
+
+	tests := map[Status]string{
+		StatusHealthy:             "healthy",
+		StatusInconclusive:        "reachable_inconclusive",
+		StatusUnauthorized:        "authentication_failed",
+		StatusModelUnavailable:    "model_unavailable",
+		StatusRateLimited:         "rate_limited",
+		StatusTimeout:             "timeout",
+		StatusNetworkError:        "network_error",
+		StatusInvalidResponse:     "invalid_response",
+		StatusProtocolUnavailable: "unsupported",
+	}
+	for status, expected := range tests {
+		if string(status) != expected {
+			t.Errorf("status %q = %q, want %q", expected, status, expected)
+		}
+	}
+}
+
+func TestNewServiceEnforcesProbeTimeoutBudget(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(nil)
+	if service.client.Timeout != 30*time.Second {
+		t.Fatalf("total timeout = %v, want 30s", service.client.Timeout)
+	}
+	transport, ok := service.client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("default transport type = %T, want *http.Transport", service.client.Transport)
+	}
+	if transport.DialContext == nil {
+		t.Fatal("default transport has no bounded dialer")
+	}
+	if transport.ResponseHeaderTimeout != 15*time.Second {
+		t.Fatalf("response header timeout = %v, want 15s", transport.ResponseHeaderTimeout)
+	}
+
+	shorter := NewService(&http.Client{Timeout: time.Second})
+	if shorter.client.Timeout != time.Second {
+		t.Fatalf("caller timeout = %v, want stricter 1s timeout preserved", shorter.client.Timeout)
+	}
+}
+
 func TestProbeDistinguishesInconclusiveAndInvalidResponses(t *testing.T) {
 	t.Parallel()
 
@@ -483,7 +528,13 @@ func TestParseRetryAfterSupportsDatesAndRejectsInvalidValues(t *testing.T) {
 	if got := parseRetryAfter(now.Add(30*time.Second).Format(http.TimeFormat), now); got != 30*time.Second {
 		t.Fatalf("date Retry-After = %v", got)
 	}
-	for _, value := range []string{"", "invalid", "-1", now.Add(-time.Minute).Format(http.TimeFormat)} {
+	for _, value := range []string{
+		"",
+		"invalid",
+		"-1",
+		"9223372036854775807",
+		now.Add(-time.Minute).Format(http.TimeFormat),
+	} {
 		if got := parseRetryAfter(value, now); got != 0 {
 			t.Errorf("Retry-After %q = %v", value, got)
 		}
