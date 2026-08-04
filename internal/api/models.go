@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 
 	"github.com/AkkunYo/SyncHub/internal/config"
 	"github.com/AkkunYo/SyncHub/internal/platform"
@@ -46,6 +47,7 @@ type publicUpstream struct {
 	Name                   string                 `json:"name"`
 	Type                   string                 `json:"type"`
 	BaseURL                string                 `json:"base_url"`
+	Keys                   []publicUpstreamKey    `json:"keys,omitempty"`
 	UserID                 int                    `json:"user_id,omitempty"`
 	DiscoveryMode          string                 `json:"discovery_mode,omitempty"`
 	EffectiveDiscoveryMode string                 `json:"effective_discovery_mode,omitempty"`
@@ -53,6 +55,14 @@ type publicUpstream struct {
 	ModeErrorCode          string                 `json:"mode_error_code,omitempty"`
 	ManageTokens           *bool                  `json:"manage_tokens,omitempty"`
 	SyncMappings           []platform.SyncMapping `json:"sync_mappings"`
+}
+
+type publicUpstreamKey struct {
+	ID                string   `json:"id"`
+	Name              string   `json:"name"`
+	Enabled           bool     `json:"enabled"`
+	Models            []string `json:"models"`
+	CredentialPresent bool     `json:"credential_present"`
 }
 
 type publicConfig struct {
@@ -133,17 +143,46 @@ type targetUpdateRequest struct {
 }
 
 type upstreamCreateRequest struct {
-	ID            string         `json:"id"`
-	Name          string         `json:"name"`
-	Type          string         `json:"type"`
-	BaseURL       string         `json:"base_url"`
-	AccessToken   string         `json:"access_token,omitempty"`
-	ManagementKey string         `json:"management_key,omitempty"`
-	APIKey        string         `json:"api_key,omitempty"`
-	ProxyAPIKey   optionalString `json:"proxy_api_key"`
-	UserID        optionalInt    `json:"user_id"`
-	DiscoveryMode string         `json:"discovery_mode,omitempty"`
-	ManageTokens  bool           `json:"manage_tokens,omitempty"`
+	ID            string                     `json:"id"`
+	Name          string                     `json:"name"`
+	Type          string                     `json:"type"`
+	BaseURL       string                     `json:"base_url"`
+	AccessToken   string                     `json:"access_token,omitempty"`
+	ManagementKey string                     `json:"management_key,omitempty"`
+	APIKey        string                     `json:"api_key,omitempty"`
+	Keys          []upstreamKeyCreateRequest `json:"keys,omitempty"`
+	ProxyAPIKey   optionalString             `json:"proxy_api_key"`
+	UserID        optionalInt                `json:"user_id"`
+	DiscoveryMode string                     `json:"discovery_mode,omitempty"`
+	ManageTokens  bool                       `json:"manage_tokens,omitempty"`
+}
+
+type upstreamKeyCreateRequest struct {
+	ID      string   `json:"id"`
+	Name    string   `json:"name"`
+	APIKey  string   `json:"api_key"`
+	Enabled *bool    `json:"enabled"`
+	Models  []string `json:"models,omitempty"`
+}
+
+type upstreamKeyUpdateRequest struct {
+	Name    optionalString      `json:"name"`
+	APIKey  optionalString      `json:"api_key"`
+	Enabled optionalBool        `json:"enabled"`
+	Models  optionalStringSlice `json:"models"`
+}
+
+type optionalStringSlice struct {
+	set   bool
+	value []string
+}
+
+func (o *optionalStringSlice) UnmarshalJSON(data []byte) error {
+	o.set = true
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return errInvalidInput
+	}
+	return json.Unmarshal(data, &o.value)
 }
 
 type upstreamUpdateRequest struct {
@@ -333,11 +372,28 @@ func redactUpstream(upstream config.UpstreamConfig) publicUpstream {
 		ID: upstream.ID, Name: upstream.Name, Type: upstream.Type, BaseURL: upstream.BaseURL, UserID: upstream.UserID,
 		DiscoveryMode: upstream.DiscoveryMode, SyncMappings: mappings,
 	}
+	if upstream.Type == "generic" {
+		result.Keys = make([]publicUpstreamKey, len(upstream.Keys))
+		for i, key := range upstream.Keys {
+			result.Keys[i] = redactUpstreamKey(key)
+		}
+	}
 	if upstream.Type == "newapi" {
 		manageTokens := upstream.ManageTokens
 		result.ManageTokens = &manageTokens
 	}
 	return result
+}
+
+func redactUpstreamKey(key config.GenericKeyConfig) publicUpstreamKey {
+	models := append([]string(nil), key.Models...)
+	if models == nil {
+		models = []string{}
+	}
+	return publicUpstreamKey{
+		ID: key.ID, Name: key.Name, Enabled: key.Enabled, Models: models,
+		CredentialPresent: strings.TrimSpace(key.APIKey) != "",
+	}
 }
 
 func toManagedChannel(channel platform.Channel, mapping *platform.SyncMapping) managedChannel {

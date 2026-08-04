@@ -14,20 +14,22 @@ import (
 )
 
 var safeErrorMessages = map[string]string{
-	"invalid_request":     "请求参数无效",
-	"target_not_found":    "目标实例不存在",
-	"upstream_not_found":  "上游实例不存在",
-	"asset_not_found":     "资产不存在",
-	"channel_not_found":   "目标渠道不存在",
-	"resource_in_use":     "资源仍有关联映射",
-	"incompatible_target": "目标与资产不兼容",
-	"needs_reconcile":     "远端状态需要重新校验",
-	"secret_unavailable":  "资产秘密不可用",
-	"upstream_failure":    "平台请求失败",
-	"upstream_timeout":    "平台请求超时",
-	"internal_error":      "内部错误",
-	"group_required":      "必须选择上游分组",
-	"group_unknown":       "上游分组不可用",
+	"invalid_request":        "请求参数无效",
+	"target_not_found":       "目标实例不存在",
+	"upstream_not_found":     "上游实例不存在",
+	"asset_not_found":        "资产不存在",
+	"channel_not_found":      "目标渠道不存在",
+	"resource_in_use":        "资源仍有关联映射",
+	"incompatible_target":    "目标与资产不兼容",
+	"needs_reconcile":        "远端状态需要重新校验",
+	"secret_unavailable":     "资产秘密不可用",
+	"upstream_failure":       "平台请求失败",
+	"upstream_timeout":       "平台请求超时",
+	"internal_error":         "内部错误",
+	"group_required":         "必须选择上游分组",
+	"group_unknown":          "上游分组不可用",
+	"unsupported_capability": "当前资源不支持此操作",
+	"resource_conflict":      "资源已存在",
 }
 
 type errorDescriptor struct {

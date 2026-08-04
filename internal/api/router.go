@@ -102,6 +102,10 @@ func NewRouterWithRuntime(deps Dependencies, runtimeState *Runtime) (*gin.Engine
 		v1.PUT("/upstreams/:upstream_id", s.updateUpstream)
 		v1.DELETE("/upstreams/:upstream_id", s.deleteUpstream)
 		v1.POST("/upstreams/:upstream_id/connection-tests", s.testUpstreamConnection)
+		v1.GET("/upstreams/:upstream_id/keys", s.listUpstreamKeys)
+		v1.POST("/upstreams/:upstream_id/keys", s.createUpstreamKey)
+		v1.PATCH("/upstreams/:upstream_id/keys/:key_id", s.updateUpstreamKey)
+		v1.DELETE("/upstreams/:upstream_id/keys/:key_id", s.deleteUpstreamKey)
 
 		v1.GET("/targets/:target_id/channels", s.listChannels)
 		v1.PUT("/targets/:target_id/channels/:channel_id", s.updateChannel)

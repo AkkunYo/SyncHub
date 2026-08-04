@@ -349,7 +349,7 @@ func validateUpstreamCreate(request upstreamCreateRequest) (config.UpstreamConfi
 	upstream := config.UpstreamConfig{ID: request.ID, Name: name, Type: typeName, BaseURL: baseURL, SyncMappings: []config.SyncMapping{}}
 	switch typeName {
 	case "newapi":
-		if request.ManagementKey != "" || request.APIKey != "" || request.ProxyAPIKey.set ||
+		if request.ManagementKey != "" || request.APIKey != "" || len(request.Keys) != 0 || request.ProxyAPIKey.set ||
 			validateCredential(request.AccessToken) != nil {
 			return config.UpstreamConfig{}, errInvalidInput
 		}
@@ -364,10 +364,27 @@ func validateUpstreamCreate(request upstreamCreateRequest) (config.UpstreamConfi
 			upstream.UserID = request.UserID.value
 		}
 	case "generic":
-		if request.UserID.set || request.AccessToken != "" || request.ManagementKey != "" || request.ProxyAPIKey.set || request.DiscoveryMode != "" || request.ManageTokens || validateCredential(request.APIKey) != nil {
+		if request.UserID.set || request.AccessToken != "" || request.ManagementKey != "" || request.ProxyAPIKey.set || request.DiscoveryMode != "" || request.ManageTokens ||
+			(request.APIKey != "" && len(request.Keys) != 0) || (request.APIKey == "" && len(request.Keys) == 0) {
 			return config.UpstreamConfig{}, errInvalidInput
 		}
-		upstream.APIKey = request.APIKey
+		if request.APIKey != "" {
+			if validateCredential(request.APIKey) != nil {
+				return config.UpstreamConfig{}, errInvalidInput
+			}
+			upstream.Keys = []config.GenericKeyConfig{{
+				ID: config.DefaultGenericKeyID, Name: "Default", APIKey: request.APIKey, Enabled: true,
+			}}
+		} else {
+			upstream.Keys = make([]config.GenericKeyConfig, len(request.Keys))
+			for i, keyRequest := range request.Keys {
+				key, err := validateUpstreamKeyCreate(keyRequest)
+				if err != nil {
+					return config.UpstreamConfig{}, err
+				}
+				upstream.Keys[i] = key
+			}
+		}
 	default:
 		return config.UpstreamConfig{}, errInvalidInput
 	}
@@ -479,7 +496,20 @@ func applyUpstreamCredentials(upstream *config.UpstreamConfig, accessToken, mana
 			return errInvalidInput
 		}
 		if apiKey.set {
-			upstream.APIKey = apiKey.value
+			keyIndex := -1
+			for i := range upstream.Keys {
+				if upstream.Keys[i].ID == config.DefaultGenericKeyID {
+					keyIndex = i
+					break
+				}
+			}
+			if keyIndex == -1 && len(upstream.Keys) == 1 {
+				keyIndex = 0
+			}
+			if keyIndex == -1 {
+				return errInvalidInput
+			}
+			upstream.Keys[keyIndex].APIKey = apiKey.value
 		}
 	default:
 		return errInvalidInput

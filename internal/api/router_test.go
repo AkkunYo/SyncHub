@@ -657,7 +657,7 @@ func TestConfigResourceConflictsAndUpstreamCRUD(t *testing.T) {
 			updated = upstream
 		}
 	}
-	if updated.APIKey != testSecret || updated.Name != "Source B renamed" {
+	if len(updated.Keys) != 1 || updated.Keys[0].APIKey != testSecret || updated.Name != "Source B renamed" {
 		t.Fatalf("credential was not retained: %#v", updated)
 	}
 
@@ -705,7 +705,7 @@ func TestGenericUpstreamCRUDUsesOnlySharedAPIKeyAndRedactsIt(t *testing.T) {
 			updated = upstream
 		}
 	}
-	if updated.APIKey != testSecret || updated.Name != "Shared Endpoint 2" {
+	if len(updated.Keys) != 1 || updated.Keys[0].APIKey != testSecret || updated.Name != "Shared Endpoint 2" {
 		t.Fatalf("credential was not retained: %#v", updated)
 	}
 
@@ -716,7 +716,7 @@ func TestGenericUpstreamCRUDUsesOnlySharedAPIKeyAndRedactsIt(t *testing.T) {
 		t.Fatalf("credential update status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 	for _, upstream := range env.store.cfg.Upstreams {
-		if upstream.ID == "source-generic" && upstream.APIKey != replacement {
+		if upstream.ID == "source-generic" && (len(upstream.Keys) != 1 || upstream.Keys[0].APIKey != replacement) {
 			t.Fatalf("replacement credential was not stored: %#v", upstream)
 		}
 	}
