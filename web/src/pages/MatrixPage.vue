@@ -5,6 +5,7 @@ import { RefreshCw, RotateCcw, Search, Send, SlidersHorizontal, X } from 'lucide
 import { api } from '@/api/client'
 import ModalDialog from '@/components/ModalDialog.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
+import TableSkeleton from '@/components/TableSkeleton.vue'
 import { useConsoleStore } from '@/stores/console'
 import type { AssetSyncResult, MatrixRow, MatrixStatus, SyncTargetResult } from '@/types'
 
@@ -16,8 +17,6 @@ const group = ref('default')
 const priority = ref(0)
 const weight = ref(100)
 const selectedTargets = ref<string[]>([])
-const securityProof = ref('')
-const allowAuthFile = ref(false)
 const submitting = ref(false)
 const validationError = ref('')
 const results = ref<AssetSyncResult[]>([])
@@ -137,8 +136,6 @@ function openSync(): void {
   group.value = 'default'
   priority.value = 0
   weight.value = 100
-  securityProof.value = ''
-  allowAuthFile.value = false
   validationError.value = ''
   results.value = []
   syncOpen.value = true
@@ -146,7 +143,6 @@ function openSync(): void {
 
 function closeSync(): void {
   if (submitting.value) return
-  securityProof.value = ''
   syncOpen.value = false
 }
 
@@ -221,11 +217,6 @@ async function runSync(
     return
   }
   submitting.value = true
-  const requestGrant = {
-    security_proof: securityProof.value,
-    allow_auth_file: allowAuthFile.value,
-  }
-  securityProof.value = ''
   try {
     const normalizedModels = parseModels()
     let sequence = 0
@@ -250,7 +241,6 @@ async function runSync(
       const response = await api.sync({
         upstream_id: submittedUpstreamId,
         units,
-        grant: requestGrant,
       })
       const byTuple = new Map(response.units.map((unit) => [`${unit.asset_id}\u0000${unit.target_id}`, unit]))
       completed = submittedRows.map(({ row, targetIds }) => ({
@@ -273,16 +263,11 @@ async function runSync(
       selectedAssets.value = selectedAssets.value.filter((assetId) => selectableIds.has(assetId))
     }
   } finally {
-    requestGrant.security_proof = ''
     submitting.value = false
   }
 }
 
 async function retryFailedTargets(): Promise<void> {
-  if (!securityProof.value.trim()) {
-    validationError.value = '重试前请重新输入一次性安全证明'
-    return
-  }
   const submittedRows: SubmittedRow[] = results.value.flatMap((result) => {
     const row = rows.value.find((candidate) => candidate.asset.id === result.assetId)
     const targetIds = result.targets
@@ -393,15 +378,11 @@ function matrixStatusLabel(status: string): string {
         <div :class="{ 'metric-alert': attentionCount > 0 }"><strong>{{ attentionCount }}</strong><span>需处理</span></div>
       </div>
 
-      <div
+      <TableSkeleton
         v-if="isInitialLoading"
-        class="table-state"
-        role="status"
-        :aria-label="matrixStatusLabel(store.matrixState)"
-      >
-        <span class="spinner" aria-hidden="true"></span>
-        <p>正在读取完整资产矩阵</p>
-      </div>
+        :label="matrixStatusLabel(store.matrixState)"
+        :columns="matrixTargets.length + 3"
+      />
 
       <div v-else-if="isInitialError" class="table-state state-error" role="alert">
         <p>{{ store.matrixError }}</p>
@@ -414,6 +395,12 @@ function matrixStatusLabel(status: string): string {
       <div v-else-if="store.upstreams.length === 0" class="state-panel">
         <SlidersHorizontal :size="24" aria-hidden="true" />
         <h2>尚未配置上游实例</h2>
+        <button class="primary-button" type="button" @click="store.navigate('settings')">前往设置</button>
+      </div>
+
+      <div v-else-if="store.targets.length === 0" class="state-panel">
+        <SlidersHorizontal :size="24" aria-hidden="true" />
+        <h2>尚未配置目标实例</h2>
         <button class="primary-button" type="button" @click="store.navigate('settings')">前往设置</button>
       </div>
 
@@ -467,7 +454,7 @@ function matrixStatusLabel(status: string): string {
           </button>
         </div>
 
-        <div v-else class="table-scroll">
+        <div v-else class="table-scroll matrix-table-scroll">
           <table class="data-table matrix-table">
             <thead>
               <tr>
@@ -564,21 +551,6 @@ function matrixStatusLabel(status: string): string {
             <span>{{ target.name }}</span>
           </label>
         </fieldset>
-
-        <label class="field">
-          <span>一次性安全证明</span>
-          <input
-            v-model="securityProof"
-            type="password"
-            autocomplete="off"
-            autocapitalize="off"
-            spellcheck="false"
-          />
-        </label>
-        <label class="check-row">
-          <input v-model="allowAuthFile" type="checkbox" />
-          <span>允许兼容认证文件迁移</span>
-        </label>
 
         <p v-if="validationError" class="form-error" role="alert">{{ validationError }}</p>
 

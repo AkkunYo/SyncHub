@@ -374,15 +374,14 @@ describe('SyncHub console', () => {
     const dialog = screen.getByRole('dialog', { name: '批量同步设置' })
     await user.clear(within(dialog).getByLabelText('模型'))
     await user.type(within(dialog).getByLabelText('模型'), 'gpt-4.1, claude-sonnet-4')
-    const proofInput = within(dialog).getByLabelText('一次性安全证明')
-    await user.type(proofInput, 'transient-proof-placeholder')
     await user.click(within(dialog).getByRole('button', { name: '开始同步' }))
 
     expect(await within(dialog).findByText('部分完成')).toBeInTheDocument()
     expect(within(dialog).getAllByText('已同步')).toHaveLength(2)
     expect(within(dialog).getByText('目标不兼容')).toBeInTheDocument()
     expect(within(dialog).getByText('需要校验')).toBeInTheDocument()
-    expect(proofInput).toHaveValue('')
+    expect(within(dialog).queryByLabelText('一次性安全证明')).not.toBeInTheDocument()
+    expect(within(dialog).queryByText('允许兼容认证文件迁移')).not.toBeInTheDocument()
     expect(screen.queryByRole('toolbar', { name: '批量操作' })).not.toBeInTheDocument()
 
     const syncCalls = fetchMock.mock.calls.filter(([input]) => String(input) === '/api/v1/sync')
@@ -390,6 +389,7 @@ describe('SyncHub console', () => {
     const body = JSON.parse(String(syncCalls[0]?.[1]?.body)) as Record<string, unknown>
     expect(body).not.toHaveProperty('provider')
     expect(body).not.toHaveProperty('base_url')
+    expect(body).not.toHaveProperty('grant')
     expect(body).toMatchObject({ units: [
       { unit_id: 'sync-1', asset_id: assetOne.id, target_id: 'target-a' },
       { unit_id: 'sync-2', asset_id: assetOne.id, target_id: 'target-b' },
@@ -1318,7 +1318,7 @@ describe('SyncHub console', () => {
     expect(screen.getByText('source-a:channel:7:key:1')).toBeInTheDocument()
   })
 
-  it('shows target result details and requires a fresh proof before retrying only failed targets', async () => {
+  it('shows target result details and retries only failed targets without an obsolete source grant', async () => {
     let syncAttempt = 0
     const fetchMock = installFetch((url, init) => {
       if (url.pathname === '/api/v1/config') return envelope(config)
@@ -1343,28 +1343,21 @@ describe('SyncHub console', () => {
     await user.click(screen.getByRole('checkbox', { name: '选择资产 OpenAI primary' }))
     await user.click(screen.getByRole('button', { name: '批量同步 1 个资产' }))
     const dialog = screen.getByRole('dialog', { name: '批量同步设置' })
-    const proof = within(dialog).getByLabelText('一次性安全证明')
-    await user.type(proof, 'first-proof-placeholder')
     await user.click(within(dialog).getByRole('button', { name: '开始同步' }))
 
     expect(await within(dialog).findByText('#42')).toBeInTheDocument()
     expect(within(dialog).getByText('target_create_failed')).toBeInTheDocument()
     expect(within(dialog).getByText('可重试')).toBeInTheDocument()
-    expect(proof).toHaveValue('')
-    await user.click(within(dialog).getByRole('button', { name: '重试失败目标' }))
-    expect(within(dialog).getByRole('alert')).toHaveTextContent('重试前请重新输入一次性安全证明')
-    expect(syncAttempt).toBe(1)
-
-    await user.type(proof, 'replacement-proof-placeholder')
     await user.click(within(dialog).getByRole('button', { name: '重试失败目标' }))
 
     expect(await within(dialog).findByText('#99')).toBeInTheDocument()
-    expect(proof).toHaveValue('')
+    expect(syncAttempt).toBe(2)
     const syncCalls = fetchMock.mock.calls.filter(([input]) => String(input) === '/api/v1/sync')
-    expect(JSON.parse(String(syncCalls[1]?.[1]?.body))).toMatchObject({
+    const retryBody = JSON.parse(String(syncCalls[1]?.[1]?.body)) as Record<string, unknown>
+    expect(retryBody).toMatchObject({
       units: [{ asset_id: assetOne.id, target_id: 'target-b' }],
-      grant: { security_proof: 'replacement-proof-placeholder' },
     })
+    expect(retryBody).not.toHaveProperty('grant')
     expect(window.localStorage).toHaveLength(0)
     expect(window.sessionStorage).toHaveLength(0)
   })

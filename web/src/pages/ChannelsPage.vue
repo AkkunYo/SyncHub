@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
-import { Pencil, RefreshCw, RotateCcw, Search, Trash2 } from 'lucide-vue-next'
+import { ChevronDown, Pencil, RefreshCw, RotateCcw, Search, Trash2 } from 'lucide-vue-next'
 
 import { api, safeErrorMessage } from '@/api/client'
 import ModalDialog from '@/components/ModalDialog.vue'
+import TableSkeleton from '@/components/TableSkeleton.vue'
 import { useConsoleStore } from '@/stores/console'
 import type { Channel, ChannelInput } from '@/types'
 
@@ -215,15 +216,11 @@ async function confirmDelete(): Promise<void> {
         </div>
       </div>
 
-      <div
+      <TableSkeleton
         v-if="store.channelState === 'loading'"
-        class="state-panel"
-        role="status"
-        aria-label="正在读取目标渠道"
-      >
-        <span class="spinner" aria-hidden="true"></span>
-        <p>正在实时读取完整渠道列表</p>
-      </div>
+        label="正在实时读取完整渠道列表"
+        :columns="8"
+      />
 
       <div v-else-if="store.channelState === 'error'" class="state-panel state-error" role="alert">
         <p>{{ store.channelError }}</p>
@@ -249,7 +246,7 @@ async function confirmDelete(): Promise<void> {
           <button class="secondary-button" type="button" @click="clearFilters">清除筛选</button>
         </div>
 
-        <div v-else class="table-scroll">
+        <div v-else class="table-scroll channels-table-scroll">
           <table class="data-table channels-table">
             <thead>
               <tr>
@@ -277,6 +274,14 @@ async function confirmDelete(): Promise<void> {
                 </td>
                 <td class="models-cell" data-label="模型">
                   <span class="model-list" :title="channel.models.join(', ')">{{ channel.models.join(', ') }}</span>
+                  <details class="mobile-model-details">
+                    <summary>
+                      <span class="mobile-model-summary-text">{{ channel.models.join(', ') || '--' }}</span>
+                      <span class="mobile-model-count">{{ channel.models.length }} 个</span>
+                      <ChevronDown :size="15" aria-hidden="true" />
+                    </summary>
+                    <p>{{ channel.models.join(', ') || '--' }}</p>
+                  </details>
                 </td>
                 <td class="group-cell" data-label="分组">{{ channel.group }}</td>
                 <td class="priority-cell" data-label="优先级">{{ channel.priority }}</td>

@@ -77,7 +77,7 @@ test('administrator completes the live multi-target synchronization and reconcil
   await expect(syncDialog.getByRole('heading', { name: '同步完成' })).toBeVisible()
   await expect(syncDialog.getByText('#101')).toBeVisible()
   await expect(syncDialog.getByText('#201')).toBeVisible()
-  await expect(syncDialog.getByLabel('一次性安全证明')).toHaveValue('')
+  await expect(syncDialog.getByLabel('一次性安全证明')).toHaveCount(0)
   await syncDialog.getByRole('button', { name: '关闭', exact: true }).click()
   await expect(page.locator('.matrix-table .status-synced')).toHaveCount(2)
 
@@ -117,8 +117,12 @@ test('administrator completes the live multi-target synchronization and reconcil
   await page.getByRole('button', { name: '资产矩阵' }).click()
   await expect(page.locator('.matrix-table .status-unsynced')).toHaveCount(2)
 
-  for (const width of [320, 390, 1440]) {
-    await page.setViewportSize({ width, height: width < 600 ? 760 : 1000 })
+  for (const { width, height } of [
+    { width: 320, height: 700 },
+    { width: 390, height: 844 },
+    { width: 1440, height: 900 },
+  ]) {
+    await page.setViewportSize({ width, height })
     await expect(page.getByRole('heading', { name: '资产矩阵' })).toBeVisible()
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
     expect(overflow).toBeLessThanOrEqual(0)
@@ -128,7 +132,7 @@ test('administrator completes the live multi-target synchronization and reconcil
     )
   }
 
-  await page.setViewportSize({ width: 320, height: 760 })
+  await page.setViewportSize({ width: 320, height: 700 })
   const menuButton = page.getByRole('button', { name: '打开导航' })
   await menuButton.click()
   await expect(page.getByRole('navigation', { name: '移动端主导航' })).toBeVisible()
