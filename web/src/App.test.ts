@@ -116,6 +116,9 @@ function installFetch(handler: RouteHandler) {
 
 function installConsoleApi(matrixData = matrix()) {
   return installFetch((url, init) => {
+    if (url.pathname === '/api/v1/health') {
+      return envelope({ status: 'ok', version: 'v1.3.0', build_date: '2026-07-29T16:00:00+08:00' })
+    }
     if (url.pathname === '/api/v1/config') return envelope(config)
     if (url.pathname === '/api/v1/matrix' && url.searchParams.get('upstream_id') === 'source-a') {
       return envelope(matrixData)
@@ -151,24 +154,50 @@ describe('SyncHub console', () => {
     expect(screen.getByRole('status', { name: '正在加载控制台' })).toBeInTheDocument()
     releaseConfig?.(envelope(config))
 
-    expect(await screen.findByRole('heading', { name: '资产同步矩阵' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '资产矩阵' })).toBeInTheDocument()
     expect(screen.getByText('OpenAI primary')).toBeInTheDocument()
     expect(screen.getAllByText('未同步')).toHaveLength(2)
   })
 
-  it('presents the console as a structured management workspace', async () => {
-    installConsoleApi()
+  it('keeps the active navigation item and the single page heading synchronized', async () => {
+    installFetch((url) => {
+      if (url.pathname === '/api/v1/health') {
+        return envelope({ status: 'ok', version: 'v1.3.0', build_date: '2026-07-29T16:00:00+08:00' })
+      }
+      if (url.pathname === '/api/v1/config') return envelope(config)
+      if (url.pathname === '/api/v1/matrix') return envelope(matrix())
+      if (url.pathname === '/api/v1/targets/target-a/channels') return envelope({ channels: [] })
+      throw new Error(`Unexpected request: ${url.pathname}`)
+    })
+    const user = userEvent.setup()
 
     renderApp()
 
     const topbar = await screen.findByRole('banner', { name: 'SyncHub 控制台顶栏' })
-    expect(within(topbar).getByText('同步工作台')).toBeInTheDocument()
-    expect(within(topbar).getByText('资产矩阵')).toBeInTheDocument()
-    expect(within(topbar).getByText('本地管理')).toBeInTheDocument()
-    expect(within(topbar).queryByText('服务在线')).not.toBeInTheDocument()
-    expect(screen.getByText('工作区')).toBeInTheDocument()
-    expect(screen.getByText('运行状态')).toBeInTheDocument()
-    expect(screen.getByRole('navigation', { name: '主导航' })).toBeInTheDocument()
+    expect(within(topbar).getByText('SyncHub')).toBeInTheDocument()
+    expect(within(topbar).getByLabelText('本地管理 API')).toHaveTextContent('最近检查正常')
+    expect(within(topbar).queryByText('同步工作台')).not.toBeInTheDocument()
+
+    const navigation = screen.getByRole('navigation', { name: '主导航' })
+    const main = screen.getByRole('main')
+    const expectPage = (label: string) => {
+      const activeItems = within(navigation)
+        .getAllByRole('button')
+        .filter((button) => button.getAttribute('aria-current') === 'page')
+      expect(activeItems).toHaveLength(1)
+      expect(activeItems[0]).toHaveAccessibleName(label)
+      const pageHeadings = within(main).getAllByRole('heading', { level: 1 })
+      expect(pageHeadings).toHaveLength(1)
+      expect(pageHeadings[0]).toHaveTextContent(label)
+    }
+
+    expectPage('资产矩阵')
+    await user.click(within(navigation).getByRole('button', { name: '目标渠道' }))
+    expectPage('目标渠道')
+    await user.click(within(navigation).getByRole('button', { name: '配置漂移' }))
+    expectPage('配置漂移')
+    await user.click(within(navigation).getByRole('button', { name: '设置' }))
+    expectPage('设置')
   })
 
   it('shows the running binary version and build time', async () => {
@@ -185,6 +214,44 @@ describe('SyncHub console', () => {
 
     expect(await screen.findByText('版本 v1.3.0')).toBeInTheDocument()
     expect(screen.getByText('编译 2026-07-29 16:00:00')).toBeInTheDocument()
+    expect(within(screen.getByLabelText('本地管理 API')).getByText('最近检查正常')).toBeInTheDocument()
+  })
+
+  it('reports an unknown API status when the health check fails', async () => {
+    installFetch((url) => {
+      if (url.pathname === '/api/v1/health') return failure('upstream_failure', '健康检查失败', 503)
+      if (url.pathname === '/api/v1/config') return envelope(config)
+      if (url.pathname === '/api/v1/matrix') return envelope(matrix())
+      throw new Error(`Unexpected request: ${url.pathname}`)
+    })
+
+    renderApp()
+
+    const apiStatus = await screen.findByLabelText('本地管理 API')
+    expect(apiStatus).toHaveTextContent('状态未知')
+    expect(within(apiStatus).queryByText('最近检查正常')).not.toBeInTheDocument()
+  })
+
+  it('keeps the console available when the initial matrix request fails', async () => {
+    installFetch((url) => {
+      if (url.pathname === '/api/v1/health') {
+        return envelope({ status: 'ok', version: 'v1.3.0', build_date: '2026-07-29T16:00:00+08:00' })
+      }
+      if (url.pathname === '/api/v1/config') return envelope(config)
+      if (url.pathname === '/api/v1/matrix') {
+        return failure('upstream_failure', '暂时无法读取资产矩阵', 502)
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`)
+    })
+    const user = userEvent.setup()
+
+    renderApp()
+
+    expect(await screen.findByRole('banner', { name: 'SyncHub 控制台顶栏' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '资产矩阵' })).toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent('暂时无法读取资产矩阵')
+    await user.click(within(screen.getByRole('navigation', { name: '主导航' })).getByRole('button', { name: '设置' }))
+    expect(screen.getByRole('heading', { name: '设置' })).toBeInTheDocument()
   })
 
   it('provides safe error, retry, and empty states', async () => {
@@ -206,6 +273,50 @@ describe('SyncHub console', () => {
 
     expect(await screen.findByText('尚未配置上游实例')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '前往设置' })).toBeEnabled()
+  })
+
+  it('filters matrix rows locally and only shows bulk actions for a selection', async () => {
+    installConsoleApi(
+      matrix([
+        {
+          asset: assetOne,
+          cells: [
+            { target_id: 'target-a', status: 'unsynced' },
+            { target_id: 'target-b', status: 'unsynced' },
+          ],
+        },
+        {
+          asset: assetTwo,
+          cells: [
+            { target_id: 'target-a', status: 'synced', channel_id: '42' },
+            { target_id: 'target-b', status: 'synced', channel_id: '93' },
+          ],
+        },
+      ]),
+    )
+    const user = userEvent.setup()
+    renderApp()
+
+    await screen.findByText('OpenAI primary')
+    expect(screen.getByText('Claude reserve')).toBeInTheDocument()
+    expect(screen.queryByRole('toolbar', { name: '批量操作' })).not.toBeInTheDocument()
+
+    const assetSearch = screen.getByRole('searchbox', { name: '搜索资产' })
+    await user.type(assetSearch, 'claude')
+    expect(screen.queryByText('OpenAI primary')).not.toBeInTheDocument()
+    expect(screen.getByText('Claude reserve')).toBeInTheDocument()
+
+    await user.clear(assetSearch)
+    await user.selectOptions(screen.getByRole('combobox', { name: '同步状态' }), 'unsynced')
+    expect(screen.getByText('OpenAI primary')).toBeInTheDocument()
+    expect(screen.queryByText('Claude reserve')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('checkbox', { name: '选择资产 OpenAI primary' }))
+    const bulkActions = screen.getByRole('toolbar', { name: '批量操作' })
+    expect(within(bulkActions).getByRole('button', { name: '批量同步 1 个资产' })).toBeEnabled()
+    await user.click(within(bulkActions).getByRole('button', { name: '清除选择' }))
+    expect(screen.queryByRole('toolbar', { name: '批量操作' })).not.toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: '选择资产 OpenAI primary' })).not.toBeChecked()
   })
 
   it('multi-selects assets and reports each target in a partial sync result', async () => {
@@ -433,7 +544,7 @@ describe('SyncHub console', () => {
     renderApp()
 
     await screen.findByText('OpenAI primary')
-    await user.click(screen.getByRole('button', { name: '漂移' }))
+    await user.click(screen.getByRole('button', { name: '配置漂移' }))
 
     expect(screen.getByRole('heading', { name: '配置漂移' })).toBeInTheDocument()
     expect(screen.getByText('权重')).toBeInTheDocument()
@@ -449,11 +560,13 @@ describe('SyncHub console', () => {
     })
   })
 
-  it('loads live target channels and distinguishes managed channels from native channels', async () => {
+  it('searches and filters managed and native channels without another API request', async () => {
+    let channelReads = 0
     installFetch((url) => {
       if (url.pathname === '/api/v1/config') return envelope(config)
       if (url.pathname === '/api/v1/matrix') return envelope(matrix())
       if (url.pathname === '/api/v1/targets/target-a/channels') {
+        channelReads += 1
         return envelope({
           channels: [
             {
@@ -498,6 +611,21 @@ describe('SyncHub console', () => {
     expect(screen.getByText('SyncHub 管理')).toBeInTheDocument()
     expect(screen.getByText('原生渠道')).toBeInTheDocument()
     expect(screen.getByText(assetOne.id)).toBeInTheDocument()
+
+    const channelSearch = screen.getByRole('searchbox', { name: '搜索渠道' })
+    await user.type(channelSearch, 'native')
+    expect(screen.queryByText('Managed OpenAI')).not.toBeInTheDocument()
+    expect(screen.getByText('Native channel')).toBeInTheDocument()
+
+    await user.clear(channelSearch)
+    const sourceFilter = screen.getByRole('combobox', { name: '来源' })
+    await user.selectOptions(sourceFilter, 'managed')
+    expect(screen.getByText('Managed OpenAI')).toBeInTheDocument()
+    expect(screen.queryByText('Native channel')).not.toBeInTheDocument()
+    await user.selectOptions(sourceFilter, 'native')
+    expect(screen.queryByText('Managed OpenAI')).not.toBeInTheDocument()
+    expect(screen.getByText('Native channel')).toBeInTheDocument()
+    expect(channelReads).toBe(1)
   })
 
   it('reloads live target channels every time the user enters the page', async () => {
@@ -856,7 +984,7 @@ describe('SyncHub console', () => {
     await user.click(within(screen.getByRole('navigation', { name: '移动端主导航' })).getByRole('button', { name: '设置' }))
 
     expect(menuButton).toHaveAttribute('aria-expanded', 'false')
-    expect(screen.getByRole('heading', { name: '实例与运行设置' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '设置' })).toBeInTheDocument()
   })
 
   it('closes the mobile navigation with Escape and restores focus to its trigger', async () => {
@@ -953,6 +1081,44 @@ describe('SyncHub console', () => {
     await user.click(within(deleteDialog).getByRole('button', { name: '确认删除' }))
     await waitFor(() => expect(screen.queryByText('Native channel')).not.toBeInTheDocument())
     expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/channels/9'))).toBe(true)
+  })
+
+  it('switches settings tabs without writing to the API', async () => {
+    const fetchMock = installFetch((url) => {
+      if (url.pathname === '/api/v1/health') {
+        return envelope({ status: 'ok', version: 'v1.3.0', build_date: '2026-07-29T16:00:00+08:00' })
+      }
+      if (url.pathname === '/api/v1/config') return envelope(config)
+      if (url.pathname === '/api/v1/matrix') return envelope(matrix())
+      throw new Error(`Unexpected request: ${url.pathname}`)
+    })
+    const user = userEvent.setup()
+    renderApp()
+
+    await screen.findByText('OpenAI primary')
+    await user.click(within(screen.getByRole('navigation', { name: '主导航' })).getByRole('button', { name: '设置' }))
+
+    const tablist = screen.getByRole('tablist', { name: '设置分类' })
+    const instanceTab = within(tablist).getByRole('tab', { name: '实例管理' })
+    const runtimeTab = within(tablist).getByRole('tab', { name: '运行参数' })
+    expect(instanceTab).toHaveAttribute('aria-selected', 'true')
+    expect(runtimeTab).toHaveAttribute('aria-selected', 'false')
+    const instancePanel = screen.getByRole('tabpanel', { name: '实例管理' })
+    expect(within(instancePanel).getByRole('heading', { name: '目标实例' })).toBeInTheDocument()
+    expect(within(instancePanel).getByRole('heading', { name: '上游实例' })).toBeInTheDocument()
+    expect(screen.queryByLabelText('同步并发')).not.toBeInTheDocument()
+
+    await user.click(runtimeTab)
+    expect(instanceTab).toHaveAttribute('aria-selected', 'false')
+    expect(runtimeTab).toHaveAttribute('aria-selected', 'true')
+    const runtimePanel = screen.getByRole('tabpanel', { name: '运行参数' })
+    expect(within(runtimePanel).getByLabelText('同步并发')).toHaveValue(4)
+    expect(screen.queryByRole('button', { name: '添加目标实例' })).not.toBeInTheDocument()
+
+    const writeCalls = fetchMock.mock.calls.filter(([, init]) =>
+      ['POST', 'PUT', 'PATCH', 'DELETE'].includes(String(init?.method ?? 'GET').toUpperCase()),
+    )
+    expect(writeCalls).toHaveLength(0)
   })
 
   it('adds, edits, and deletes instances and saves runtime settings', async () => {
@@ -1204,7 +1370,7 @@ describe('SyncHub console', () => {
     renderApp()
 
     await screen.findByText('OpenAI primary')
-    await user.click(screen.getByRole('button', { name: '漂移' }))
+    await user.click(screen.getByRole('button', { name: '配置漂移' }))
     await user.click(screen.getByRole('button', { name: '校验全部目标' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('部分目标校验失败')
