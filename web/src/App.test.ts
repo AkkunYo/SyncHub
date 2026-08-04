@@ -161,6 +161,37 @@ describe('SyncHub console', () => {
     expect(within(matrixTable!).getAllByText('未同步')).toHaveLength(2)
   })
 
+  it('routes the fixed console navigation through stable URLs', async () => {
+    installConsoleApi()
+    const user = userEvent.setup()
+
+    renderApp()
+
+    const navigation = await screen.findByRole('navigation', { name: '主导航' })
+    const destinations = [
+      ['同步工作台', '/sync'],
+      ['上游连接', '/upstreams'],
+      ['目标实例', '/targets'],
+      ['漂移修复', '/drift'],
+      ['任务记录', '/tasks'],
+      ['系统设置', '/settings'],
+    ] as const
+
+    await waitFor(() => expect(window.location.pathname).toBe('/sync'))
+    for (const [label, path] of destinations) {
+      expect(within(navigation).getByRole('link', { name: label })).toHaveAttribute('href', path)
+    }
+
+    await user.click(within(navigation).getByRole('link', { name: '任务记录' }))
+    expect(window.location.pathname).toBe('/tasks')
+    expect(screen.getByRole('heading', { name: '任务记录' })).toBeInTheDocument()
+
+    await user.click(within(navigation).getByRole('link', { name: '漂移修复' }))
+    expect(window.location.pathname).toBe('/drift')
+    expect(screen.getByRole('heading', { name: '配置漂移' })).toBeInTheDocument()
+    expect(within(navigation).getByRole('link', { name: '漂移修复' })).toHaveAttribute('aria-current', 'page')
+  })
+
   it('keeps the active navigation item and the single page heading synchronized', async () => {
     installFetch((url) => {
       if (url.pathname === '/api/v1/health') {
