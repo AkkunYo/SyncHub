@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"net/http"
 	"reflect"
@@ -35,6 +36,7 @@ type cachedUpstream struct {
 
 type upstreamIdentity struct {
 	sourceType       string
+	name             string
 	baseURL          string
 	userID           int
 	requestTimeout   time.Duration
@@ -119,7 +121,7 @@ func (r *AdapterResolver) ResolveUpstream(ctx context.Context, cfg config.Upstre
 	switch identity.sourceType {
 	case "newapi":
 		mode := strings.ToLower(strings.TrimSpace(cfg.DiscoveryMode))
-		if strings.TrimSpace(cfg.AccessToken) == "" || strings.TrimSpace(cfg.APIKey) != "" || (mode != "" && mode != config.DiscoveryModeToken) {
+		if strings.TrimSpace(cfg.AccessToken) == "" || strings.TrimSpace(cfg.APIKey) != "" || len(cfg.Keys) != 0 || (mode != "" && mode != config.DiscoveryModeToken) {
 			return nil, ErrUnsupportedPlatform
 		}
 		built, buildErr := newapi.NewSource(newapi.Config{
@@ -134,9 +136,12 @@ func (r *AdapterResolver) ResolveUpstream(ctx context.Context, cfg config.Upstre
 		}
 		source = built
 	case "generic":
-		built, buildErr := generic.NewSource(generic.Config{
-			SourceID: cfg.ID, Name: cfg.Name, BaseURL: cfg.BaseURL, APIKey: strings.TrimSpace(cfg.APIKey),
-			RequestTimeout: timeout,
+		keys, keyErr := genericKeysForResolver(cfg)
+		if keyErr != nil {
+			return nil, errors.New("generic upstream configuration is invalid")
+		}
+		built, buildErr := generic.NewMultiKeySource(generic.MultiKeyConfig{
+			SourceID: cfg.ID, Name: cfg.Name, BaseURL: cfg.BaseURL, Keys: keys, RequestTimeout: timeout,
 		}, r.client)
 		if buildErr != nil {
 			return nil, errors.New("generic upstream configuration is invalid")
@@ -182,6 +187,7 @@ func (r *AdapterResolver) DiscoveryModeStatus(cfg config.UpstreamConfig) platfor
 func newUpstreamIdentity(cfg config.UpstreamConfig, timeout time.Duration) upstreamIdentity {
 	sourceType := strings.ToLower(strings.TrimSpace(cfg.Type))
 	credential := ""
+	credentialDigest := [sha256.Size]byte{}
 	userID := 0
 	useManagementHeader := false
 	switch sourceType {
@@ -189,18 +195,89 @@ func newUpstreamIdentity(cfg config.UpstreamConfig, timeout time.Duration) upstr
 		credential = strings.TrimSpace(cfg.AccessToken)
 		userID = cfg.UserID
 	case "generic":
-		credential = strings.TrimSpace(cfg.APIKey)
+		credentialDigest = genericKeysIdentityDigest(cfg)
+	}
+	if sourceType != "generic" {
+		credentialDigest = sha256.Sum256([]byte(credential))
 	}
 	return upstreamIdentity{
 		sourceType:       sourceType,
+		name:             strings.TrimSpace(cfg.Name),
 		baseURL:          strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/"),
 		userID:           userID,
 		requestTimeout:   timeout,
-		credentialDigest: sha256.Sum256([]byte(credential)),
+		credentialDigest: credentialDigest,
 		proxyKeyDigest:   sha256.Sum256([]byte(strings.TrimSpace(cfg.ProxyAPIKey))),
 		managementHeader: useManagementHeader,
 		discoveryMode:    cfg.DiscoveryMode,
 	}
+}
+
+func genericKeysForResolver(cfg config.UpstreamConfig) ([]generic.KeyConfig, error) {
+	legacyAPIKey := strings.TrimSpace(cfg.APIKey)
+	if len(cfg.Keys) == 0 {
+		if legacyAPIKey == "" {
+			return nil, errors.New("generic upstream keys are required")
+		}
+		return []generic.KeyConfig{{
+			ID: generic.DefaultKeyID, Name: cfg.Name, APIKey: legacyAPIKey, Enabled: true,
+		}}, nil
+	}
+	if legacyAPIKey != "" {
+		return nil, errors.New("generic upstream legacy and multi-key credentials cannot be combined")
+	}
+	keys := make([]generic.KeyConfig, len(cfg.Keys))
+	for i, key := range cfg.Keys {
+		keys[i] = generic.KeyConfig{
+			ID: key.ID, Name: key.Name, APIKey: key.APIKey, Enabled: key.Enabled,
+			Models: append([]string(nil), key.Models...),
+		}
+	}
+	return keys, nil
+}
+
+func genericKeysIdentityDigest(cfg config.UpstreamConfig) [sha256.Size]byte {
+	hasher := sha256.New()
+	writeUint64 := func(value uint64) {
+		var encoded [8]byte
+		binary.BigEndian.PutUint64(encoded[:], value)
+		_, _ = hasher.Write(encoded[:])
+	}
+	writeBytes := func(value []byte) {
+		writeUint64(uint64(len(value)))
+		_, _ = hasher.Write(value)
+	}
+	writeString := func(value string) {
+		writeBytes([]byte(strings.TrimSpace(value)))
+	}
+
+	if len(cfg.Keys) == 0 {
+		writeString("legacy")
+		credential := sha256.Sum256([]byte(strings.TrimSpace(cfg.APIKey)))
+		writeBytes(credential[:])
+	} else {
+		writeString("keys")
+		writeUint64(uint64(len(cfg.Keys)))
+		for _, key := range cfg.Keys {
+			writeString(key.ID)
+			writeString(key.Name)
+			if key.Enabled {
+				writeString("enabled")
+			} else {
+				writeString("disabled")
+			}
+			credential := sha256.Sum256([]byte(strings.TrimSpace(key.APIKey)))
+			writeBytes(credential[:])
+			writeUint64(uint64(len(key.Models)))
+			for _, model := range key.Models {
+				writeString(model)
+			}
+		}
+	}
+
+	var digest [sha256.Size]byte
+	copy(digest[:], hasher.Sum(nil))
+	return digest
 }
 
 func (r *AdapterResolver) requestTimeout() (time.Duration, error) {
