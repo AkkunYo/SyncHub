@@ -56,6 +56,10 @@ func TestLoadDefaultsOmittedGenericKeyEnabledToTrue(t *testing.T) {
       - id: primary
         name: Primary
         api_key: primary-secret
+      - id: disabled
+        name: Disabled
+        api_key: disabled-secret
+        enabled: false
 `)
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
@@ -66,6 +70,31 @@ func TestLoadDefaultsOmittedGenericKeyEnabledToTrue(t *testing.T) {
 	}
 	if !cfg.Upstreams[0].Keys[0].Enabled {
 		t.Fatal("omitted enabled did not default to true")
+	}
+	if cfg.Upstreams[0].Keys[1].Enabled {
+		t.Fatal("explicit enabled false was not preserved")
+	}
+}
+
+func TestLoadRejectsUnknownGenericKeyField(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := baseConfigYAML(`  - id: source-generic
+    name: Generic Source
+    type: generic
+    base_url: https://source.example.com
+    keys:
+      - id: primary
+        name: Primary
+        api_key: primary-secret
+        unexpected: true
+`)
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "unexpected") {
+		t.Fatalf("Load() error = %v, want unknown key field rejection", err)
 	}
 }
 
@@ -108,6 +137,7 @@ func TestValidateRejectsInvalidGenericKeys(t *testing.T) {
 		{name: "duplicate name", mutate: func(upstream *UpstreamConfig) { upstream.Keys[1].Name = "PRIMARY" }, want: "keys[1].name"},
 		{name: "blank model", mutate: func(upstream *UpstreamConfig) { upstream.Keys[0].Models = []string{"gpt-4.1", " "} }, want: "keys[0].models"},
 		{name: "duplicate model", mutate: func(upstream *UpstreamConfig) { upstream.Keys[0].Models = []string{"gpt-4.1", "gpt-4.1"} }, want: "keys[0].models"},
+		{name: "legacy and keys combined", mutate: func(upstream *UpstreamConfig) { upstream.APIKey = "legacy-secret" }, want: "api_key"},
 	}
 	for _, test := range tests {
 		test := test

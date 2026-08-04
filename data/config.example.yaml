@@ -36,6 +36,17 @@ upstreams:
     name: OpenAI-Compatible Source
     type: generic
     base_url: https://provider.example.com
-    # Shared model API key; no upstream login or management access is used.
-    api_key: REPLACE_WITH_SHARED_MODEL_API_KEY
+    # Each key is an independent model source; no upstream login is used.
+    keys:
+      - id: primary
+        name: Primary Key
+        api_key: REPLACE_WITH_PRIMARY_MODEL_API_KEY
+        enabled: true
+      - id: backup
+        name: Backup Key
+        api_key: REPLACE_WITH_BACKUP_MODEL_API_KEY
+        enabled: false
+        # Optional fallback when this endpoint cannot list its own models.
+        models:
+          - gpt-5.6-sol
     sync_mappings: []

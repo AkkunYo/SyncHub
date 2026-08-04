@@ -54,12 +54,15 @@ type TargetConfig struct {
 }
 
 type UpstreamConfig struct {
-	ID                    string               `json:"id" yaml:"id"`
-	Name                  string               `json:"name" yaml:"name"`
-	Type                  string               `json:"type" yaml:"type"`
-	BaseURL               string               `json:"base_url" yaml:"base_url"`
-	UserID                int                  `json:"user_id,omitempty" yaml:"user_id,omitempty"`
-	AccessToken           string               `json:"-" yaml:"access_token,omitempty"`
+	ID          string             `json:"id" yaml:"id"`
+	Name        string             `json:"name" yaml:"name"`
+	Type        string             `json:"type" yaml:"type"`
+	BaseURL     string             `json:"base_url" yaml:"base_url"`
+	UserID      int                `json:"user_id,omitempty" yaml:"user_id,omitempty"`
+	AccessToken string             `json:"-" yaml:"access_token,omitempty"`
+	Keys        []GenericKeyConfig `json:"keys,omitempty" yaml:"keys,omitempty"`
+	// APIKey is accepted only as a legacy generic-upstream input and is
+	// normalized into Keys before the configuration is stored.
 	APIKey                string               `json:"-" yaml:"api_key,omitempty"`
 	ManagementKey         string               `json:"-" yaml:"management_key,omitempty"`
 	ProxyAPIKey           string               `json:"-" yaml:"proxy_api_key,omitempty"`
@@ -68,6 +71,24 @@ type UpstreamConfig struct {
 	ManagedTokenNamespace string               `json:"managed_token_namespace,omitempty" yaml:"managed_token_namespace,omitempty"`
 	ManagedTokens         []ManagedTokenRecord `json:"-" yaml:"managed_tokens,omitempty"`
 	SyncMappings          []SyncMapping        `json:"sync_mappings" yaml:"sync_mappings,omitempty"`
+}
+
+type GenericKeyConfig struct {
+	ID      string   `json:"id" yaml:"id"`
+	Name    string   `json:"name" yaml:"name"`
+	APIKey  string   `json:"-" yaml:"api_key"`
+	Enabled bool     `json:"enabled" yaml:"enabled"`
+	Models  []string `json:"models,omitempty" yaml:"models,omitempty"`
+}
+
+func (key *GenericKeyConfig) UnmarshalYAML(unmarshal func(any) error) error {
+	type plain GenericKeyConfig
+	decoded := plain{Enabled: true}
+	if err := unmarshal(&decoded); err != nil {
+		return err
+	}
+	*key = GenericKeyConfig(decoded)
+	return nil
 }
 
 type ManagedTokenRecord struct {
@@ -89,11 +110,15 @@ const (
 	DiscoveryModeAuto    = "auto"
 	DiscoveryModeChannel = "channel"
 	DiscoveryModeToken   = "token"
+	DefaultGenericKeyID  = "default"
 	ManagedTokenPending  = "pending"
 	ManagedTokenReady    = "ready"
 )
 
-var managedTokenNamespacePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
+var (
+	genericKeyIDPattern          = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+	managedTokenNamespacePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
+)
 
 type SyncMapping = platform.SyncMapping
 
@@ -257,6 +282,9 @@ func Validate(cfg *Config) error {
 		upstream.BaseURL = baseURL
 		switch upstream.Type {
 		case "newapi":
+			if len(upstream.Keys) != 0 {
+				return fmt.Errorf("upstream[%d].keys is not supported for newapi", i)
+			}
 			if strings.TrimSpace(upstream.APIKey) != "" {
 				return fmt.Errorf("upstream[%d].api_key is not supported for newapi", i)
 			}
@@ -264,8 +292,8 @@ func Validate(cfg *Config) error {
 				return fmt.Errorf("upstream[%d].access_token is required", i)
 			}
 		case "generic":
-			if strings.TrimSpace(upstream.APIKey) == "" {
-				return fmt.Errorf("upstream[%d].api_key is required", i)
+			if err := normalizeGenericKeys(i, upstream); err != nil {
+				return err
 			}
 		}
 
@@ -288,6 +316,71 @@ func Validate(cfg *Config) error {
 			if mapping.TargetChannelID == "" {
 				return fmt.Errorf("upstream[%d].sync_mappings[%d].target_channel_id is required", i, mappingIndex)
 			}
+		}
+	}
+	return nil
+}
+
+func normalizeGenericKeys(upstreamIndex int, upstream *UpstreamConfig) error {
+	legacyAPIKey := upstream.APIKey
+	if strings.TrimSpace(legacyAPIKey) != "" {
+		if len(upstream.Keys) != 0 {
+			return fmt.Errorf("upstream[%d].api_key cannot be combined with keys", upstreamIndex)
+		}
+		upstream.Keys = []GenericKeyConfig{{
+			ID:      DefaultGenericKeyID,
+			Name:    "Default",
+			APIKey:  legacyAPIKey,
+			Enabled: true,
+		}}
+		upstream.APIKey = ""
+	} else if len(upstream.Keys) == 0 {
+		return fmt.Errorf("upstream[%d].keys or legacy api_key is required", upstreamIndex)
+	} else {
+		upstream.APIKey = ""
+	}
+
+	ids := make(map[string]struct{}, len(upstream.Keys))
+	names := make(map[string]struct{}, len(upstream.Keys))
+	for keyIndex := range upstream.Keys {
+		key := &upstream.Keys[keyIndex]
+		prefix := fmt.Sprintf("upstream[%d].keys[%d]", upstreamIndex, keyIndex)
+		key.ID = strings.TrimSpace(key.ID)
+		key.Name = strings.TrimSpace(key.Name)
+		if !genericKeyIDPattern.MatchString(key.ID) {
+			return fmt.Errorf("%s.id is invalid", prefix)
+		}
+		if _, exists := ids[key.ID]; exists {
+			return fmt.Errorf("%s.id is duplicated", prefix)
+		}
+		ids[key.ID] = struct{}{}
+		if key.Name == "" {
+			return fmt.Errorf("%s.name is required", prefix)
+		}
+		nameKey := strings.ToLower(key.Name)
+		if _, exists := names[nameKey]; exists {
+			return fmt.Errorf("%s.name is duplicated", prefix)
+		}
+		names[nameKey] = struct{}{}
+		if strings.TrimSpace(key.APIKey) == "" {
+			return fmt.Errorf("%s.api_key is required", prefix)
+		}
+
+		models := make([]string, 0, len(key.Models))
+		seenModels := make(map[string]struct{}, len(key.Models))
+		for _, value := range key.Models {
+			model := strings.TrimSpace(value)
+			if model == "" {
+				return fmt.Errorf("%s.models is invalid", prefix)
+			}
+			if _, exists := seenModels[model]; exists {
+				return fmt.Errorf("%s.models is duplicated", prefix)
+			}
+			seenModels[model] = struct{}{}
+			models = append(models, model)
+		}
+		if key.Models != nil {
+			key.Models = models
 		}
 	}
 	return nil
@@ -399,6 +492,10 @@ func deepCopy(cfg Config) Config {
 	copyConfig.Upstreams = make([]UpstreamConfig, len(cfg.Upstreams))
 	for i := range cfg.Upstreams {
 		copyConfig.Upstreams[i] = cfg.Upstreams[i]
+		copyConfig.Upstreams[i].Keys = append([]GenericKeyConfig(nil), cfg.Upstreams[i].Keys...)
+		for j := range copyConfig.Upstreams[i].Keys {
+			copyConfig.Upstreams[i].Keys[j].Models = append([]string(nil), cfg.Upstreams[i].Keys[j].Models...)
+		}
 		copyConfig.Upstreams[i].ManagedTokens = append([]ManagedTokenRecord(nil), cfg.Upstreams[i].ManagedTokens...)
 		for j := range copyConfig.Upstreams[i].ManagedTokens {
 			copyConfig.Upstreams[i].ManagedTokens[j].Models = append([]string(nil), cfg.Upstreams[i].ManagedTokens[j].Models...)
