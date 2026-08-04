@@ -26,22 +26,29 @@ export const useConsoleStore = defineStore('console', () => {
   const channels = ref<Channel[]>([])
   const activeView = ref<ViewName>('matrix')
   const initialState = ref<LoadState>('idle')
+  const healthState = ref<LoadState>('idle')
   const matrixState = ref<LoadState>('idle')
   const channelState = ref<LoadState>('idle')
   const initialError = ref('')
   const matrixError = ref('')
   const channelError = ref('')
-  let matrixRequestId = 0
+  let matrixGeneration = 0
   let channelRequestId = 0
+  let consoleRequestId = 0
   let matrixController: AbortController | null = null
   let channelController: AbortController | null = null
 
   const targets = computed(() => config.value?.targets ?? [])
   const upstreams = computed(() => config.value?.upstreams ?? [])
   const driftItems = computed<DriftItem[]>(() => {
-    if (!matrix.value) return []
-    const targetNames = new Map(matrix.value.targets.map((target) => [target.id, target.name]))
-    return matrix.value.rows.flatMap((row) =>
+    const currentMatrix = matrix.value
+    if (
+      matrixState.value !== 'ready'
+      || !currentMatrix
+      || currentMatrix.upstream_id !== selectedUpstreamId.value
+    ) return []
+    const targetNames = new Map(currentMatrix.targets.map((target) => [target.id, target.name]))
+    return currentMatrix.rows.flatMap((row) =>
       row.cells
         .filter((cell) => cell.status === 'drifted' && Boolean(cell.channel_id))
         .map((cell) => ({
@@ -55,68 +62,105 @@ export const useConsoleStore = defineStore('console', () => {
     )
   })
 
-  async function loadConsole(): Promise<void> {
-    initialState.value = 'loading'
-    initialError.value = ''
+  function invalidateMatrixRequest(): number {
+    const generation = ++matrixGeneration
+    matrixController?.abort()
+    matrixController = null
+    return generation
+  }
+
+  function isCurrentMatrixRequest(generation: number, upstreamId: string): boolean {
+    return generation === matrixGeneration && selectedUpstreamId.value === upstreamId
+  }
+
+  async function loadMatrixForGeneration(upstreamId: string, generation: number): Promise<void> {
+    if (!isCurrentMatrixRequest(generation, upstreamId)) return
+    const controller = new AbortController()
+    matrixController = controller
+    matrixState.value = 'loading'
+    matrixError.value = ''
     try {
-      const healthRequest = api.getHealth().catch(() => null)
-      config.value = await api.getConfig()
-      runtimeInfo.value = await healthRequest
+      const response = await api.getMatrix(upstreamId, controller.signal)
+      if (!isCurrentMatrixRequest(generation, upstreamId)) return
+      matrix.value = response
+      matrixState.value = 'ready'
+    } catch (error) {
+      if (!isCurrentMatrixRequest(generation, upstreamId)) return
+      matrixError.value = safeErrorMessage(error)
+      matrixState.value = 'error'
+      throw error
+    } finally {
+      if (generation === matrixGeneration && matrixController === controller) matrixController = null
+    }
+  }
+
+  async function loadConsole(): Promise<void> {
+    const requestId = ++consoleRequestId
+    invalidateMatrixRequest()
+    initialState.value = 'loading'
+    healthState.value = 'loading'
+    initialError.value = ''
+    runtimeInfo.value = null
+
+    void api.getHealth().then(
+      (response) => {
+        if (requestId !== consoleRequestId) return
+        runtimeInfo.value = response
+        healthState.value = 'ready'
+      },
+      () => {
+        if (requestId !== consoleRequestId) return
+        healthState.value = 'error'
+      },
+    )
+
+    try {
+      const response = await api.getConfig()
+      if (requestId !== consoleRequestId) return
+      config.value = response
       selectedTargetId.value = targets.value[0]?.id ?? ''
       const firstUpstream = upstreams.value[0]?.id ?? ''
       selectedUpstreamId.value = firstUpstream
-      if (firstUpstream) await loadMatrix(firstUpstream)
-      else {
+      initialState.value = 'ready'
+
+      if (firstUpstream) {
+        void loadMatrix(firstUpstream).catch(() => undefined)
+      } else {
         matrix.value = null
+        matrixError.value = ''
         matrixState.value = 'ready'
       }
-      initialState.value = 'ready'
     } catch (error) {
+      if (requestId !== consoleRequestId) return
       initialError.value = safeErrorMessage(error)
       initialState.value = 'error'
     }
   }
 
   async function loadMatrix(upstreamId = selectedUpstreamId.value): Promise<void> {
-    const requestId = ++matrixRequestId
-    matrixController?.abort()
-    matrixController = null
+    const generation = invalidateMatrixRequest()
+    selectedUpstreamId.value = upstreamId
     if (!upstreamId) {
       matrix.value = null
+      matrixError.value = ''
       matrixState.value = 'ready'
       return
     }
-    const controller = new AbortController()
-    matrixController = controller
-    selectedUpstreamId.value = upstreamId
-    matrixState.value = 'loading'
-    matrixError.value = ''
-    try {
-      const response = await api.getMatrix(upstreamId, controller.signal)
-      if (requestId !== matrixRequestId || selectedUpstreamId.value !== upstreamId) return
-      matrix.value = response
-      matrixState.value = 'ready'
-    } catch (error) {
-      if (requestId !== matrixRequestId || selectedUpstreamId.value !== upstreamId) return
-      matrixError.value = safeErrorMessage(error)
-      matrixState.value = 'error'
-      throw error
-    } finally {
-      if (requestId === matrixRequestId) matrixController = null
-    }
+    await loadMatrixForGeneration(upstreamId, generation)
   }
 
   async function refreshAssets(): Promise<void> {
     const upstreamId = selectedUpstreamId.value
     if (!upstreamId) return
+    const generation = invalidateMatrixRequest()
     matrixState.value = 'loading'
     matrixError.value = ''
     try {
       await api.refreshUpstream(upstreamId)
-      if (selectedUpstreamId.value !== upstreamId) return
-      await loadMatrix(upstreamId)
+      if (!isCurrentMatrixRequest(generation, upstreamId)) return
+      await loadMatrixForGeneration(upstreamId, generation)
     } catch (error) {
-      if (selectedUpstreamId.value !== upstreamId) return
+      if (!isCurrentMatrixRequest(generation, upstreamId)) return
       matrixError.value = safeErrorMessage(error)
       matrixState.value = 'error'
     }
@@ -157,7 +201,9 @@ export const useConsoleStore = defineStore('console', () => {
 
   async function refreshMatrixAfterConfigChange(): Promise<void> {
     if (!selectedUpstreamId.value) {
+      invalidateMatrixRequest()
       matrix.value = null
+      matrixError.value = ''
       matrixState.value = 'ready'
       return
     }
@@ -168,10 +214,18 @@ export const useConsoleStore = defineStore('console', () => {
     }
   }
 
-  function applySyncResults(results: AssetSyncResult[]): void {
-    if (!matrix.value) return
+  function applySyncResults(
+    results: AssetSyncResult[],
+    expectedUpstreamId = selectedUpstreamId.value,
+  ): boolean {
+    const currentMatrix = matrix.value
+    if (
+      !currentMatrix
+      || selectedUpstreamId.value !== expectedUpstreamId
+      || currentMatrix.upstream_id !== expectedUpstreamId
+    ) return false
     const resultsByAsset = new Map(results.map((result) => [result.assetId, result.targets]))
-    for (const row of matrix.value.rows) {
+    for (const row of currentMatrix.rows) {
       const targetResults = resultsByAsset.get(row.asset.id)
       if (!targetResults) continue
       const byTarget = new Map(targetResults.map((result) => [result.target_id, result]))
@@ -189,6 +243,7 @@ export const useConsoleStore = defineStore('console', () => {
           : cell
       })
     }
+    return true
   }
 
   function markDriftAccepted(assetId: string, targetId: string): void {
@@ -218,11 +273,13 @@ export const useConsoleStore = defineStore('console', () => {
 
   async function upsertUpstream(upstream: UpstreamConfig): Promise<void> {
     if (!config.value) return
+    const refreshSelected = !selectedUpstreamId.value || selectedUpstreamId.value === upstream.id
     const index = config.value.upstreams.findIndex((candidate) => candidate.id === upstream.id)
     if (index === -1) config.value.upstreams.push(upstream)
     else config.value.upstreams[index] = upstream
-    if (!selectedUpstreamId.value) {
-      selectedUpstreamId.value = upstream.id
+    if (!selectedUpstreamId.value) selectedUpstreamId.value = upstream.id
+    if (refreshSelected) {
+      matrix.value = null
       await refreshMatrixAfterConfigChange()
     }
   }
@@ -278,6 +335,7 @@ export const useConsoleStore = defineStore('console', () => {
     channels,
     activeView,
     initialState,
+    healthState,
     matrixState,
     channelState,
     initialError,

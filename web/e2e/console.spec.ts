@@ -39,7 +39,7 @@ async function expectNoOverlap(first: Locator, second: Locator): Promise<void> {
 test('administrator completes the live multi-target synchronization and reconciliation journey', async ({ page, request }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: '资产同步矩阵' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '资产矩阵' })).toBeVisible()
   await page.getByRole('button', { name: '设置', exact: true }).click()
 
   await addInstance(page, '上游', {
@@ -68,7 +68,7 @@ test('administrator completes the live multi-target synchronization and reconcil
   })
 
   await page.getByRole('button', { name: '资产矩阵' }).click()
-  await page.locator('header').getByRole('button', { name: '刷新资产' }).click()
+  await page.locator('.workspace-toolbar').getByRole('button', { name: '刷新资产' }).click()
   await expect(page.getByText('E2E upstream key', { exact: true })).toBeVisible()
   await page.getByRole('checkbox', { name: '选择资产 E2E upstream key' }).check()
   await page.getByRole('button', { name: '批量同步 1 个资产' }).click()
@@ -83,10 +83,10 @@ test('administrator completes the live multi-target synchronization and reconcil
 
   const driftResponse = await request.post(`${fixtureURL}/__control/target-a/channels/101/drift`)
   expect(driftResponse.ok()).toBe(true)
-  await page.getByRole('button', { name: '漂移' }).click()
+  await page.getByRole('button', { name: '配置漂移' }).click()
   await page.getByRole('button', { name: '校验全部目标' }).click()
   await expect(page.getByText('100 -> 61')).toBeVisible()
-  await page.getByRole('button', { name: '接受 E2E Target Alpha 的目标端状态' }).click()
+  await page.getByRole('button', { name: '接受 E2E upstream key 在 E2E Target Alpha 的目标端状态' }).click()
   await expect(page.getByText('漂移已接受')).toBeVisible()
 
   const deleteResponse = await request.delete(`${fixtureURL}/__control/target-b/channels/201`)
@@ -119,12 +119,12 @@ test('administrator completes the live multi-target synchronization and reconcil
 
   for (const width of [320, 390, 1440]) {
     await page.setViewportSize({ width, height: width < 600 ? 760 : 1000 })
-    await expect(page.getByRole('heading', { name: '资产同步矩阵' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: '资产矩阵' })).toBeVisible()
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
     expect(overflow).toBeLessThanOrEqual(0)
     await expectNoOverlap(
       page.getByLabel('上游实例'),
-      page.locator('header').getByRole('button', { name: '刷新资产' }),
+      page.locator('.workspace-toolbar').getByRole('button', { name: '刷新资产' }),
     )
   }
 

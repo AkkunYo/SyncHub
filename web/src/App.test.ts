@@ -155,8 +155,10 @@ describe('SyncHub console', () => {
     releaseConfig?.(envelope(config))
 
     expect(await screen.findByRole('heading', { name: '资产矩阵' })).toBeInTheDocument()
-    expect(screen.getByText('OpenAI primary')).toBeInTheDocument()
-    expect(screen.getAllByText('未同步')).toHaveLength(2)
+    expect(await screen.findByText('OpenAI primary')).toBeInTheDocument()
+    const matrixTable = document.querySelector<HTMLElement>('.matrix-table')
+    expect(matrixTable).not.toBeNull()
+    expect(within(matrixTable!).getAllByText('未同步')).toHaveLength(2)
   })
 
   it('keeps the active navigation item and the single page heading synchronized', async () => {
@@ -249,8 +251,15 @@ describe('SyncHub console', () => {
 
     expect(await screen.findByRole('banner', { name: 'SyncHub 控制台顶栏' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: '资产矩阵' })).toBeInTheDocument()
+    expect(await screen.findByRole('alert')).toHaveTextContent('暂时无法读取资产矩阵')
+    const navigation = screen.getByRole('navigation', { name: '主导航' })
+    await user.click(within(navigation).getByRole('button', { name: '配置漂移' }))
+    expect(screen.getByRole('heading', { name: '配置漂移' })).toBeInTheDocument()
     expect(screen.getByRole('alert')).toHaveTextContent('暂时无法读取资产矩阵')
-    await user.click(within(screen.getByRole('navigation', { name: '主导航' })).getByRole('button', { name: '设置' }))
+    expect(screen.queryByText('当前没有配置漂移')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '重试' })).toBeEnabled()
+
+    await user.click(within(navigation).getByRole('button', { name: '设置' }))
     expect(screen.getByRole('heading', { name: '设置' })).toBeInTheDocument()
   })
 
@@ -374,6 +383,7 @@ describe('SyncHub console', () => {
     expect(within(dialog).getByText('目标不兼容')).toBeInTheDocument()
     expect(within(dialog).getByText('需要校验')).toBeInTheDocument()
     expect(proofInput).toHaveValue('')
+    expect(screen.queryByRole('toolbar', { name: '批量操作' })).not.toBeInTheDocument()
 
     const syncCalls = fetchMock.mock.calls.filter(([input]) => String(input) === '/api/v1/sync')
     expect(syncCalls).toHaveLength(1)
@@ -549,7 +559,7 @@ describe('SyncHub console', () => {
     expect(screen.getByRole('heading', { name: '配置漂移' })).toBeInTheDocument()
     expect(screen.getByText('权重')).toBeInTheDocument()
     expect(screen.getByText('100 -> 80')).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: '接受 Target Alpha 的目标端状态' }))
+    await user.click(screen.getByRole('button', { name: '接受 OpenAI primary 在 Target Alpha 的目标端状态' }))
 
     expect(await screen.findByText('漂移已接受')).toBeInTheDocument()
     expect(screen.getByText('当前没有配置漂移')).toBeInTheDocument()
@@ -700,7 +710,9 @@ describe('SyncHub console', () => {
     await user.click(within(screen.getByRole('dialog', { name: '删除目标渠道' })).getByRole('button', { name: '确认删除' }))
     await user.click(screen.getByRole('button', { name: '资产矩阵' }))
 
-    expect(screen.getByText('未同步')).toBeInTheDocument()
+    const matrixTable = document.querySelector<HTMLElement>('.matrix-table')
+    expect(matrixTable).not.toBeNull()
+    expect(within(matrixTable!).getByText('未同步')).toBeInTheDocument()
     expect(document.querySelector('.status-synced')).not.toBeInTheDocument()
   })
 
@@ -980,11 +992,20 @@ describe('SyncHub console', () => {
     await user.click(menuButton)
 
     expect(menuButton).toHaveAttribute('aria-expanded', 'true')
-    expect(screen.getByRole('navigation', { name: '移动端主导航' })).toHaveAttribute('data-open', 'true')
-    await user.click(within(screen.getByRole('navigation', { name: '移动端主导航' })).getByRole('button', { name: '设置' }))
+    const mobileNavigation = screen.getByRole('navigation', { name: '移动端主导航' })
+    expect(mobileNavigation).toHaveAttribute('data-open', 'true')
+    const activeMobileItem = within(mobileNavigation).getByRole('button', { name: '资产矩阵' })
+    const lastMobileItem = within(mobileNavigation).getByRole('button', { name: '设置' })
+    expect(activeMobileItem).toHaveFocus()
+    await fireEvent.keyDown(document, { key: 'Tab', shiftKey: true })
+    expect(lastMobileItem).toHaveFocus()
+    await fireEvent.keyDown(document, { key: 'Tab' })
+    expect(activeMobileItem).toHaveFocus()
+    await user.click(within(mobileNavigation).getByRole('button', { name: '设置' }))
 
     expect(menuButton).toHaveAttribute('aria-expanded', 'false')
     expect(screen.getByRole('heading', { name: '设置' })).toBeInTheDocument()
+    expect(document.getElementById('main-content')).toHaveFocus()
   })
 
   it('closes the mobile navigation with Escape and restores focus to its trigger', async () => {
@@ -1102,18 +1123,27 @@ describe('SyncHub console', () => {
     const instanceTab = within(tablist).getByRole('tab', { name: '实例管理' })
     const runtimeTab = within(tablist).getByRole('tab', { name: '运行参数' })
     expect(instanceTab).toHaveAttribute('aria-selected', 'true')
+    expect(instanceTab).toHaveAttribute('tabindex', '0')
     expect(runtimeTab).toHaveAttribute('aria-selected', 'false')
+    expect(runtimeTab).toHaveAttribute('tabindex', '-1')
     const instancePanel = screen.getByRole('tabpanel', { name: '实例管理' })
     expect(within(instancePanel).getByRole('heading', { name: '目标实例' })).toBeInTheDocument()
     expect(within(instancePanel).getByRole('heading', { name: '上游实例' })).toBeInTheDocument()
-    expect(screen.queryByLabelText('同步并发')).not.toBeInTheDocument()
+    expect(document.getElementById('settings-runtime-panel')).toHaveAttribute('hidden')
 
-    await user.click(runtimeTab)
+    instanceTab.focus()
+    await fireEvent.keyDown(instanceTab, { key: 'ArrowRight' })
+    await waitFor(() => expect(runtimeTab).toHaveFocus())
     expect(instanceTab).toHaveAttribute('aria-selected', 'false')
     expect(runtimeTab).toHaveAttribute('aria-selected', 'true')
     const runtimePanel = screen.getByRole('tabpanel', { name: '运行参数' })
     expect(within(runtimePanel).getByLabelText('同步并发')).toHaveValue(4)
     expect(screen.queryByRole('button', { name: '添加目标实例' })).not.toBeInTheDocument()
+
+    await fireEvent.keyDown(runtimeTab, { key: 'Home' })
+    await waitFor(() => expect(instanceTab).toHaveFocus())
+    expect(instanceTab).toHaveAttribute('aria-selected', 'true')
+    await user.click(runtimeTab)
 
     const writeCalls = fetchMock.mock.calls.filter(([, init]) =>
       ['POST', 'PUT', 'PATCH', 'DELETE'].includes(String(init?.method ?? 'GET').toUpperCase()),
@@ -1172,6 +1202,7 @@ describe('SyncHub console', () => {
     await user.click(within(deleteDialog).getByRole('button', { name: '确认删除' }))
     await waitFor(() => expect(screen.queryByText('Source Alpha')).not.toBeInTheDocument())
 
+    await user.click(screen.getByRole('tab', { name: '运行参数' }))
     const concurrency = screen.getByLabelText('同步并发')
     await user.clear(concurrency)
     await user.type(concurrency, '6')

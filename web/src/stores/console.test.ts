@@ -31,6 +31,34 @@ const emptyMatrix: MatrixData = {
   targets: [target],
   rows: [],
 }
+function matrixWithDrift(upstreamId = upstream.id): MatrixData {
+  return {
+    ...emptyMatrix,
+    upstream_id: upstreamId,
+    rows: [{
+      asset: {
+        id: 'asset-a',
+        source_id: upstreamId,
+        source_type: 'newapi',
+        provider: 'openai',
+        raw_type: 'OpenAI',
+        kind: 'static_api_key',
+        name: 'Asset A',
+        base_url: '',
+        models: ['model-a'],
+        enabled: true,
+        secret_readable: true,
+        metadata: {},
+      },
+      cells: [{
+        target_id: target.id,
+        status: 'drifted',
+        channel_id: '42',
+        differences: [{ field: 'weight', expected: 100, actual: 80 }],
+      }],
+    }],
+  }
+}
 const channel: Channel = {
   id: '42',
   name: 'Channel A',
@@ -150,6 +178,71 @@ describe('console store', () => {
     expect(store.channels).toEqual([{ ...channel, id: '84', name: 'Target B channel' }])
   })
 
+  it('only exposes drift for the ready matrix of the selected upstream', () => {
+    const store = useConsoleStore()
+    store.selectedUpstreamId = upstream.id
+    store.matrix = matrixWithDrift()
+    store.matrixState = 'ready'
+
+    expect(store.driftItems).toHaveLength(1)
+    for (const state of ['idle', 'loading', 'error'] as const) {
+      store.matrixState = state
+      expect(store.driftItems).toEqual([])
+    }
+
+    store.matrixState = 'ready'
+    store.selectedUpstreamId = upstreamB.id
+    expect(store.driftItems).toEqual([])
+  })
+
+  it('rejects sync results for a different expected upstream without changing the matrix', () => {
+    const store = useConsoleStore()
+    const original = matrixWithDrift()
+    store.selectedUpstreamId = upstream.id
+    store.matrix = structuredClone(original)
+    store.matrixState = 'ready'
+
+    const applied = store.applySyncResults([{
+      assetId: 'asset-a',
+      assetName: 'Asset A',
+      targets: [{ target_id: target.id, status: 'synced', channel_id: '99' }],
+    }], upstreamB.id)
+
+    expect(applied).toBe(false)
+    expect(store.matrix).toEqual(original)
+  })
+
+  it('does not let a stale A refresh overwrite the newer A matrix after switching A to B to A', async () => {
+    const store = useConsoleStore()
+    store.config = { ...sanitizedConfig, upstreams: [upstream, upstreamB] }
+    store.selectedUpstreamId = upstream.id
+    store.matrix = emptyMatrix
+    store.matrixState = 'ready'
+
+    let finishRefresh: ((value: { refreshed: boolean }) => void) | undefined
+    const pendingRefresh = new Promise<{ refreshed: boolean }>((resolve) => { finishRefresh = resolve })
+    vi.spyOn(api, 'refreshUpstream').mockReturnValue(pendingRefresh)
+    vi.spyOn(api, 'getMatrix').mockImplementation(async (upstreamId) => ({
+      ...emptyMatrix,
+      upstream_id: upstreamId,
+      targets: [{ ...target, name: upstreamId === upstream.id ? 'Fresh A target' : 'Source B target' }],
+    }))
+
+    const staleRefresh = store.refreshAssets()
+    await store.loadMatrix(upstreamB.id)
+    await store.loadMatrix(upstream.id)
+    finishRefresh?.({ refreshed: true })
+    await staleRefresh
+
+    expect(store.selectedUpstreamId).toBe(upstream.id)
+    expect(store.matrix?.targets[0]?.name).toBe('Fresh A target')
+    expect(store.matrixState).toBe('ready')
+    expect(vi.mocked(api.getMatrix).mock.calls.map(([upstreamId]) => upstreamId)).toEqual([
+      upstreamB.id,
+      upstream.id,
+    ])
+  })
+
   it('refreshes matrix columns after target changes and loads the next source after deletion', async () => {
     const store = useConsoleStore()
     const targetB = { ...target, id: 'target-b', name: 'Target B' }
@@ -181,6 +274,8 @@ describe('console store', () => {
   it('updates only desensitized resources and matrix results', async () => {
     const store = useConsoleStore()
     store.config = { ...sanitizedConfig, targets: [...sanitizedConfig.targets], upstreams: [...sanitizedConfig.upstreams] }
+    store.selectedUpstreamId = upstream.id
+    store.matrixState = 'ready'
     store.matrix = {
       ...emptyMatrix,
       rows: [

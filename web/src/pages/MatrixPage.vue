@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { RefreshCw, RotateCcw, Send, SlidersHorizontal } from 'lucide-vue-next'
+import { RefreshCw, RotateCcw, Search, Send, SlidersHorizontal, X } from 'lucide-vue-next'
 
 import { api } from '@/api/client'
 import ModalDialog from '@/components/ModalDialog.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import { useConsoleStore } from '@/stores/console'
-import type { AssetSyncResult, MatrixRow, SyncTargetResult } from '@/types'
+import type { AssetSyncResult, MatrixRow, MatrixStatus, SyncTargetResult } from '@/types'
 
 const store = useConsoleStore()
 const selectedAssets = ref<string[]>([])
@@ -21,16 +21,42 @@ const allowAuthFile = ref(false)
 const submitting = ref(false)
 const validationError = ref('')
 const results = ref<AssetSyncResult[]>([])
+const assetQuery = ref('')
+const statusFilter = ref<MatrixStatus | 'all'>('all')
 
 interface SubmittedRow {
   row: MatrixRow
   targetIds: string[]
 }
 
-const rows = computed(() => store.matrix?.rows ?? [])
-const matrixTargets = computed(() => store.matrix?.targets ?? store.targets)
+const activeMatrix = computed(() =>
+  store.matrix?.upstream_id === store.selectedUpstreamId ? store.matrix : null,
+)
+const rows = computed(() => activeMatrix.value?.rows ?? [])
+const matrixTargets = computed(() => activeMatrix.value?.targets ?? store.targets)
+const filteredRows = computed(() => {
+  const query = assetQuery.value.trim().toLocaleLowerCase()
+  return rows.value.filter((row) => {
+    const matchesQuery = !query || [
+      row.asset.name,
+      row.asset.id,
+      row.asset.provider,
+      row.asset.kind,
+      row.asset.raw_type,
+      row.asset.source_type,
+      ...row.asset.models,
+    ].some((value) => value.toLocaleLowerCase().includes(query))
+    const matchesStatus = statusFilter.value === 'all'
+      || row.cells.some((cell) => cell.status === statusFilter.value)
+    return matchesQuery && matchesStatus
+  })
+})
 const selectedRows = computed(() => rows.value.filter((row) => selectedAssets.value.includes(row.asset.id)))
-const selectableRows = computed(() => rows.value.filter(isSelectable))
+const selectableRows = computed(() => filteredRows.value.filter(isSelectable))
+const isRefreshing = computed(() => store.matrixState === 'loading' && activeMatrix.value !== null)
+const isInitialLoading = computed(() => store.matrixState === 'loading' && activeMatrix.value === null)
+const isInitialError = computed(() => store.matrixState === 'error' && activeMatrix.value === null)
+const hasFilters = computed(() => Boolean(assetQuery.value.trim()) || statusFilter.value !== 'all')
 const syncableTargetIds = computed(
   () =>
     new Set(
@@ -47,6 +73,10 @@ const attentionCount = computed(
 const allSelected = computed(
   () => selectableRows.value.length > 0 && selectableRows.value.every((row) => selectedAssets.value.includes(row.asset.id)),
 )
+const partiallySelected = computed(() => {
+  const selectedCount = selectableRows.value.filter((row) => selectedAssets.value.includes(row.asset.id)).length
+  return selectedCount > 0 && selectedCount < selectableRows.value.length
+})
 const resultSummary = computed(() => {
   const targets = results.value.flatMap((result) => result.targets)
   const successes = targets.filter((target) => target.status === 'synced').length
@@ -73,13 +103,29 @@ function assetReasonId(row: MatrixRow): string {
   return `asset-reason-${row.asset.id.replace(/[^A-Za-z0-9_-]/g, '-')}`
 }
 
-function onUpstreamChange(event: Event): void {
+async function onUpstreamChange(event: Event): Promise<void> {
   selectedAssets.value = []
-  void store.loadMatrix((event.target as HTMLSelectElement).value)
+  try {
+    await store.loadMatrix((event.target as HTMLSelectElement).value)
+  } catch {
+    // The store exposes the already-sanitized error state.
+  }
 }
 
 function toggleAll(): void {
-  selectedAssets.value = allSelected.value ? [] : selectableRows.value.map((row) => row.asset.id)
+  const visibleIds = new Set(selectableRows.value.map((row) => row.asset.id))
+  selectedAssets.value = allSelected.value
+    ? selectedAssets.value.filter((assetId) => !visibleIds.has(assetId))
+    : [...new Set([...selectedAssets.value, ...visibleIds])]
+}
+
+function clearFilters(): void {
+  assetQuery.value = ''
+  statusFilter.value = 'all'
+}
+
+function clearSelection(): void {
+  selectedAssets.value = []
 }
 
 function openSync(): void {
@@ -99,6 +145,7 @@ function openSync(): void {
 }
 
 function closeSync(): void {
+  if (submitting.value) return
   securityProof.value = ''
   syncOpen.value = false
 }
@@ -139,9 +186,14 @@ async function submitSync(): Promise<void> {
       ),
     }))
     .filter(({ targetIds }) => targetIds.length > 0)
+  if (submittedRows.length === 0) {
+    validationError.value = '所选资产没有可同步的目标'
+    return
+  }
+  const submittedUpstreamId = store.selectedUpstreamId
   validationError.value = ''
   results.value = []
-  await runSync(submittedRows, false)
+  await runSync(submittedRows, false, submittedUpstreamId)
 }
 
 function mergeSyncResults(current: AssetSyncResult[], completed: AssetSyncResult[]): AssetSyncResult[] {
@@ -159,7 +211,15 @@ function mergeSyncResults(current: AssetSyncResult[], completed: AssetSyncResult
   return [...merged.values()]
 }
 
-async function runSync(submittedRows: SubmittedRow[], merge: boolean): Promise<void> {
+async function runSync(
+  submittedRows: SubmittedRow[],
+  merge: boolean,
+  submittedUpstreamId: string,
+): Promise<void> {
+  if (submittedRows.length === 0) {
+    validationError.value = merge ? '没有可重试的失败目标' : '所选资产没有可同步的目标'
+    return
+  }
   submitting.value = true
   const requestGrant = {
     security_proof: securityProof.value,
@@ -188,7 +248,7 @@ async function runSync(submittedRows: SubmittedRow[], merge: boolean): Promise<v
     let completed: AssetSyncResult[]
     try {
       const response = await api.sync({
-        upstream_id: store.selectedUpstreamId,
+        upstream_id: submittedUpstreamId,
         units,
         grant: requestGrant,
       })
@@ -208,7 +268,10 @@ async function runSync(submittedRows: SubmittedRow[], merge: boolean): Promise<v
       }))
     }
     results.value = merge ? mergeSyncResults(results.value, completed) : completed
-    store.applySyncResults(completed)
+    if (store.applySyncResults(completed, submittedUpstreamId)) {
+      const selectableIds = new Set(rows.value.filter(isSelectable).map((row) => row.asset.id))
+      selectedAssets.value = selectedAssets.value.filter((assetId) => selectableIds.has(assetId))
+    }
   } finally {
     requestGrant.security_proof = ''
     submitting.value = false
@@ -227,9 +290,13 @@ async function retryFailedTargets(): Promise<void> {
       .map((target) => target.target_id)
     return row && targetIds.length > 0 ? [{ row, targetIds }] : []
   })
-  if (submittedRows.length === 0) return
+  if (submittedRows.length === 0) {
+    validationError.value = '没有可重试的失败目标'
+    return
+  }
+  const submittedUpstreamId = store.selectedUpstreamId
   validationError.value = ''
-  await runSync(submittedRows, true)
+  await runSync(submittedRows, true, submittedUpstreamId)
 }
 
 function targetLabel(targetId: string): string {
@@ -262,139 +329,207 @@ function matrixStatusLabel(status: string): string {
 <template>
   <section class="page" aria-labelledby="matrix-heading">
     <header class="page-header">
-      <div>
-        <p class="eyebrow">上游资产</p>
-        <h1 id="matrix-heading">资产同步矩阵</h1>
+      <h1 id="matrix-heading">资产矩阵</h1>
+    </header>
+
+    <div
+      class="workspace-panel"
+      :class="{ 'data-refreshing': isRefreshing }"
+      :aria-busy="store.matrixState === 'loading'"
+    >
+      <div class="workspace-toolbar">
+        <div class="page-actions matrix-page-actions">
+          <div class="toolbar-filters">
+            <label class="compact-field">
+              <span>上游实例</span>
+              <select :value="store.selectedUpstreamId" @change="onUpstreamChange">
+                <option v-for="source in store.upstreams" :key="source.id" :value="source.id">
+                  {{ source.name }}
+                </option>
+              </select>
+            </label>
+
+            <label class="search-field">
+              <Search :size="16" aria-hidden="true" />
+              <span class="sr-only">搜索资产</span>
+              <input
+                v-model="assetQuery"
+                type="search"
+                aria-label="搜索资产"
+                placeholder="搜索资产"
+                autocomplete="off"
+              />
+            </label>
+
+            <label class="filter-field">
+              <span class="sr-only">同步状态</span>
+              <select v-model="statusFilter" aria-label="同步状态">
+                <option value="all">全部状态</option>
+                <option value="unsynced">未同步</option>
+                <option value="synced">已同步</option>
+                <option value="drifted">有漂移</option>
+                <option value="incompatible">不兼容</option>
+                <option value="needs_reconcile">待校验</option>
+              </select>
+            </label>
+          </div>
+
+          <button
+            class="secondary-button"
+            type="button"
+            :disabled="!store.selectedUpstreamId || store.matrixState === 'loading'"
+            @click="store.refreshAssets"
+          >
+            <RefreshCw :size="16" aria-hidden="true" />
+            刷新资产
+          </button>
+        </div>
       </div>
-      <div class="page-actions matrix-page-actions">
-        <label class="compact-field">
-          <span>上游实例</span>
-          <select :value="store.selectedUpstreamId" @change="onUpstreamChange">
-            <option v-for="source in store.upstreams" :key="source.id" :value="source.id">
-              {{ source.name }}
-            </option>
-          </select>
-        </label>
-        <button
-          class="secondary-button"
-          type="button"
-          :disabled="!store.selectedUpstreamId || store.matrixState === 'loading'"
-          @click="store.refreshAssets"
-        >
+
+      <div v-if="activeMatrix" class="metric-strip" aria-label="矩阵摘要">
+        <div><strong>{{ rows.length }}</strong><span>资产</span></div>
+        <div><strong>{{ syncedCount }}</strong><span>已同步</span></div>
+        <div :class="{ 'metric-alert': driftCount > 0 }"><strong>{{ driftCount }}</strong><span>漂移</span></div>
+        <div :class="{ 'metric-alert': attentionCount > 0 }"><strong>{{ attentionCount }}</strong><span>需处理</span></div>
+      </div>
+
+      <div
+        v-if="isInitialLoading"
+        class="table-state"
+        role="status"
+        :aria-label="matrixStatusLabel(store.matrixState)"
+      >
+        <span class="spinner" aria-hidden="true"></span>
+        <p>正在读取完整资产矩阵</p>
+      </div>
+
+      <div v-else-if="isInitialError" class="table-state state-error" role="alert">
+        <p>{{ store.matrixError }}</p>
+        <button class="secondary-button" type="button" @click="retryMatrix">
+          <RotateCcw :size="16" aria-hidden="true" />
+          重试
+        </button>
+      </div>
+
+      <div v-else-if="store.upstreams.length === 0" class="state-panel">
+        <SlidersHorizontal :size="24" aria-hidden="true" />
+        <h2>尚未配置上游实例</h2>
+        <button class="primary-button" type="button" @click="store.navigate('settings')">前往设置</button>
+      </div>
+
+      <div v-else-if="rows.length === 0" class="state-panel">
+        <h2>暂无上游资产</h2>
+        <p>最近一次完整快照为空。</p>
+        <button class="secondary-button" type="button" @click="store.refreshAssets">
           <RefreshCw :size="16" aria-hidden="true" />
           刷新资产
         </button>
       </div>
-    </header>
 
-    <div v-if="store.matrix" class="metric-strip" aria-label="矩阵摘要">
-      <div><strong>{{ rows.length }}</strong><span>资产</span></div>
-      <div><strong>{{ syncedCount }}</strong><span>已同步</span></div>
-      <div><strong>{{ driftCount }}</strong><span>漂移</span></div>
-      <div><strong>{{ attentionCount }}</strong><span>需处理</span></div>
-    </div>
-
-    <div
-      v-if="store.matrixState === 'loading'"
-      class="state-panel"
-      role="status"
-      :aria-label="matrixStatusLabel(store.matrixState)"
-    >
-      <span class="spinner" aria-hidden="true"></span>
-      <p>正在读取完整资产矩阵</p>
-    </div>
-
-    <div v-else-if="store.matrixState === 'error'" class="state-panel state-error" role="alert">
-      <p>{{ store.matrixError }}</p>
-      <button class="secondary-button" type="button" @click="retryMatrix">
-        <RotateCcw :size="16" aria-hidden="true" />
-        重试
-      </button>
-    </div>
-
-    <div v-else-if="store.upstreams.length === 0" class="state-panel">
-      <SlidersHorizontal :size="24" aria-hidden="true" />
-      <h2>尚未配置上游实例</h2>
-      <button class="primary-button" type="button" @click="store.navigate('settings')">前往设置</button>
-    </div>
-
-    <div v-else-if="rows.length === 0" class="state-panel">
-      <h2>暂无上游资产</h2>
-      <p>最近一次完整快照为空。</p>
-      <button class="secondary-button" type="button" @click="store.refreshAssets">
-        <RefreshCw :size="16" aria-hidden="true" />
-        刷新资产
-      </button>
-    </div>
-
-    <template v-else>
-      <div class="table-toolbar">
-        <span>{{ selectedAssets.length }} 个已选择</span>
-        <button
-          class="primary-button"
-          type="button"
-          :disabled="selectedAssets.length === 0"
-          :aria-label="`批量同步 ${selectedAssets.length} 个资产`"
-          @click="openSync"
+      <template v-else>
+        <div
+          v-if="store.matrixState === 'error'"
+          class="table-state state-error"
+          role="alert"
         >
-          <Send :size="16" aria-hidden="true" />
-          批量同步
-        </button>
-      </div>
-      <div class="table-scroll">
-        <table class="data-table matrix-table">
-          <thead>
-            <tr>
-              <th class="selection-cell">
-                <input
-                  type="checkbox"
-                  aria-label="选择全部可同步资产"
-                  :checked="allSelected"
-                  @change="toggleAll"
-                />
-              </th>
-              <th>资产</th>
-              <th>供应商 / 形态</th>
-              <th v-for="target in matrixTargets" :key="target.id">{{ target.name }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="row in rows" :key="row.asset.id">
-              <td class="selection-cell">
-                <input
-                  v-model="selectedAssets"
-                  type="checkbox"
-                  :value="row.asset.id"
-                  :disabled="!isSelectable(row)"
-                  :aria-label="`选择资产 ${row.asset.name}`"
-                  :aria-describedby="assetAvailability(row) ? assetReasonId(row) : undefined"
-                />
-              </td>
-              <td>
-                <strong>{{ row.asset.name }}</strong>
-                <small>{{ row.asset.id }}</small>
-                <span v-if="assetAvailability(row)" class="inline-warning">{{ assetAvailability(row)!.label }}</span>
-                <span v-if="assetAvailability(row)" :id="assetReasonId(row)" class="sr-only">
-                  {{ assetAvailability(row)!.description }}
-                </span>
-              </td>
-              <td>
-                <span class="provider-name">{{ row.asset.provider }}</span>
-                <small>{{ row.asset.kind }}</small>
-                <small class="raw-type">{{ row.asset.raw_type }}</small>
-              </td>
-              <td v-for="target in matrixTargets" :key="target.id">
-                <StatusBadge
-                  v-if="row.cells.find((cell) => cell.target_id === target.id)"
-                  :status="row.cells.find((cell) => cell.target_id === target.id)!.status"
-                />
-                <span v-else class="muted">--</span>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </template>
+          <p>{{ store.matrixError }}</p>
+          <button class="secondary-button" type="button" @click="retryMatrix">
+            <RotateCcw :size="16" aria-hidden="true" />
+            重试
+          </button>
+        </div>
+
+        <div v-if="selectedRows.length" class="selection-toolbar" role="toolbar" aria-label="批量操作">
+          <span>{{ selectedRows.length }} 个已选择</span>
+          <button class="secondary-button" type="button" aria-label="清除选择" @click="clearSelection">
+            <X :size="16" aria-hidden="true" />
+            清除选择
+          </button>
+          <button
+            class="primary-button"
+            type="button"
+            :aria-label="`批量同步 ${selectedRows.length} 个资产`"
+            @click="openSync"
+          >
+            <Send :size="16" aria-hidden="true" />
+            批量同步
+          </button>
+        </div>
+
+        <div class="table-result-count" aria-live="polite">
+          显示 {{ filteredRows.length }} / {{ rows.length }} 项资产
+        </div>
+
+        <div v-if="filteredRows.length === 0" class="table-state">
+          <h2>未找到匹配资产</h2>
+          <button v-if="hasFilters" class="secondary-button" type="button" @click="clearFilters">
+            清除筛选
+          </button>
+        </div>
+
+        <div v-else class="table-scroll">
+          <table class="data-table matrix-table">
+            <thead>
+              <tr>
+                <th class="selection-cell">
+                  <input
+                    type="checkbox"
+                    aria-label="选择全部可同步资产"
+                    :checked="allSelected"
+                    :disabled="selectableRows.length === 0"
+                    :indeterminate="partiallySelected"
+                    :aria-checked="partiallySelected ? 'mixed' : allSelected ? 'true' : 'false'"
+                    @change="toggleAll"
+                  />
+                </th>
+                <th class="asset-cell">资产</th>
+                <th class="provider-cell">供应商 / 形态</th>
+                <th v-for="target in matrixTargets" :key="target.id" class="target-cell">{{ target.name }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in filteredRows" :key="row.asset.id">
+                <td class="selection-cell" data-label="选择">
+                  <input
+                    v-model="selectedAssets"
+                    type="checkbox"
+                    :value="row.asset.id"
+                    :disabled="!isSelectable(row)"
+                    :aria-label="`选择资产 ${row.asset.name}`"
+                    :aria-describedby="assetAvailability(row) ? assetReasonId(row) : undefined"
+                  />
+                </td>
+                <td class="asset-cell" data-label="资产">
+                  <strong>{{ row.asset.name }}</strong>
+                  <small>{{ row.asset.id }}</small>
+                  <span v-if="assetAvailability(row)" class="inline-warning">{{ assetAvailability(row)!.label }}</span>
+                  <span v-if="assetAvailability(row)" :id="assetReasonId(row)" class="sr-only">
+                    {{ assetAvailability(row)!.description }}
+                  </span>
+                </td>
+                <td class="provider-cell" data-label="供应商 / 形态">
+                  <span class="provider-name">{{ row.asset.provider }}</span>
+                  <small>{{ row.asset.kind }}</small>
+                  <small class="raw-type">{{ row.asset.raw_type }}</small>
+                </td>
+                <td
+                  v-for="target in matrixTargets"
+                  :key="target.id"
+                  class="target-cell"
+                  :data-label="target.name"
+                >
+                  <StatusBadge
+                    v-if="row.cells.find((cell) => cell.target_id === target.id)"
+                    :status="row.cells.find((cell) => cell.target_id === target.id)!.status"
+                  />
+                  <span v-else class="muted">--</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </template>
+    </div>
 
     <ModalDialog v-if="syncOpen" title="批量同步设置" close-label="关闭批量同步" @close="closeSync">
       <form class="form-stack" @submit.prevent="submitSync">
@@ -475,7 +610,7 @@ function matrixStatusLabel(status: string): string {
         </section>
 
         <footer class="form-actions">
-          <button class="secondary-button" type="button" @click="closeSync">关闭</button>
+          <button class="secondary-button" type="button" :disabled="submitting" @click="closeSync">关闭</button>
           <button class="primary-button" type="submit" :disabled="submitting">
             <span v-if="submitting" class="spinner spinner-small" aria-hidden="true"></span>
             <Send v-else :size="16" aria-hidden="true" />
