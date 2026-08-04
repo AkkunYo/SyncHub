@@ -259,12 +259,11 @@ h3 {
   margin-top: 0;
 }
 
-.side-nav button,
-.mobile-nav button {
+.side-nav a,
+.mobile-nav a {
   display: grid;
   min-height: 40px;
   align-items: center;
-  border: 0;
   border-radius: 8px;
   grid-template-columns: 22px 1fr auto;
   gap: 10px;
@@ -272,18 +271,19 @@ h3 {
   color: #52525b;
   background: transparent;
   text-align: left;
+  text-decoration: none;
 }
 
-.side-nav button:hover,
-.side-nav button.active,
-.mobile-nav button:hover,
-.mobile-nav button.active {
+.side-nav a:hover,
+.side-nav a.active,
+.mobile-nav a:hover,
+.mobile-nav a.active {
   color: #1d4ed8;
   background: #eff6ff;
 }
 
-.side-nav button.active,
-.mobile-nav button.active {
+.side-nav a.active,
+.mobile-nav a.active {
   font-weight: 650;
   box-shadow: none;
 }
@@ -415,6 +415,7 @@ h3 {
 .secondary-button,
 .danger-button {
   padding: 0 13px;
+  text-decoration: none;
 }
 
 .primary-button {
@@ -532,6 +533,53 @@ input[type="checkbox"] {
   border-radius: 8px;
   background: var(--surface);
   box-shadow: var(--shadow-sm);
+}
+
+.route-list {
+  display: grid;
+}
+
+.route-list-row {
+  display: grid;
+  min-height: 68px;
+  align-items: center;
+  grid-template-columns: minmax(180px, 0.8fr) minmax(240px, 1.4fr) auto;
+  gap: 16px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.route-list-row:last-child {
+  border-bottom: 0;
+}
+
+.route-list-primary {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.route-list-primary strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.route-list-primary small,
+.route-list-row code {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.route-list-row .secondary-button {
+  white-space: nowrap;
+}
+
+.route-empty-state svg {
+  color: var(--blue);
 }
 
 .workspace-toolbar {
@@ -1427,7 +1475,7 @@ input[type="checkbox"] {
     flex: 3 1 500px;
   }
 
-  .mobile-nav button {
+  .mobile-nav a {
     min-height: 44px;
   }
 
@@ -1454,6 +1502,23 @@ input[type="checkbox"] {
   .page-actions {
     width: 100%;
     justify-content: flex-start;
+  }
+
+  .route-list-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px 12px;
+  }
+
+  .route-list-row code {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .route-list-row .secondary-button {
+    grid-column: 2;
+    grid-row: 1;
   }
 
   .primary-button,

@@ -2,8 +2,10 @@ import { createPinia } from 'pinia'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/vue'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { createWebHistory } from 'vue-router'
 
 import App from './App.vue'
+import { createAppRouter } from './router'
 import type { MatrixRow, UpstreamAsset } from './types'
 
 type RouteHandler = (url: URL, init: RequestInit) => Response | Promise<Response>
@@ -128,11 +130,22 @@ function installConsoleApi(matrixData = matrix()) {
 }
 
 function renderApp() {
-  return render(App, { global: { plugins: [createPinia()] } })
+  const router = createAppRouter(createWebHistory())
+  return {
+    ...render(App, { global: { plugins: [createPinia(), router] } }),
+    router,
+  }
+}
+
+async function openTargetChannels(user: ReturnType<typeof userEvent.setup>, targetName = 'Target Alpha') {
+  const navigation = screen.getByRole('navigation', { name: '主导航' })
+  await user.click(within(navigation).getByRole('link', { name: '目标实例' }))
+  await user.click(screen.getByRole('link', { name: `查看 ${targetName} 渠道` }))
 }
 
 describe('SyncHub console', () => {
   beforeEach(() => {
+    vi.stubGlobal('scrollTo', vi.fn())
     window.localStorage.clear()
     window.sessionStorage.clear()
     window.history.replaceState({}, '', '/')
@@ -192,14 +205,50 @@ describe('SyncHub console', () => {
     expect(within(navigation).getByRole('link', { name: '漂移修复' })).toHaveAttribute('aria-current', 'page')
   })
 
-  it('keeps the active navigation item and the single page heading synchronized', async () => {
+  it('loads the target selected by a direct channel route', async () => {
+    const fetchMock = installFetch((url) => {
+      if (url.pathname === '/api/v1/health') {
+        return envelope({ status: 'ok', version: 'v1.3.0', build_date: '2026-07-29T16:00:00+08:00' })
+      }
+      if (url.pathname === '/api/v1/config') return envelope(config)
+      if (url.pathname === '/api/v1/matrix') return envelope(matrix())
+      if (url.pathname === '/api/v1/targets/target-b/channels') {
+        return envelope({
+          channels: [{
+            id: '77',
+            name: 'Target Beta channel',
+            provider: 'openai',
+            raw_type: '1',
+            base_url: 'https://provider.invalid',
+            models: ['gpt-4.1'],
+            group: 'default',
+            priority: 0,
+            weight: 100,
+            enabled: true,
+            managed: false,
+          }],
+        })
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`)
+    })
+    window.history.replaceState({}, '', '/targets/target-b/channels')
+
+    renderApp()
+
+    expect(await screen.findByText('Target Beta channel')).toBeInTheDocument()
+    expect(screen.getByLabelText('目标实例')).toHaveValue('target-b')
+    expect(within(screen.getByRole('navigation', { name: '主导航' })).getByRole('link', { name: '目标实例' }))
+      .toHaveAttribute('aria-current', 'page')
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/targets/target-b/channels'))).toBe(true)
+  })
+
+  it('keeps the active route and the single page heading synchronized', async () => {
     installFetch((url) => {
       if (url.pathname === '/api/v1/health') {
         return envelope({ status: 'ok', version: 'v1.3.0', build_date: '2026-07-29T16:00:00+08:00' })
       }
       if (url.pathname === '/api/v1/config') return envelope(config)
       if (url.pathname === '/api/v1/matrix') return envelope(matrix())
-      if (url.pathname === '/api/v1/targets/target-a/channels') return envelope({ channels: [] })
       throw new Error(`Unexpected request: ${url.pathname}`)
     })
     const user = userEvent.setup()
@@ -213,24 +262,30 @@ describe('SyncHub console', () => {
 
     const navigation = screen.getByRole('navigation', { name: '主导航' })
     const main = screen.getByRole('main')
-    const expectPage = (label: string) => {
-      const activeItems = within(navigation)
-        .getAllByRole('button')
-        .filter((button) => button.getAttribute('aria-current') === 'page')
-      expect(activeItems).toHaveLength(1)
-      expect(activeItems[0]).toHaveAccessibleName(label)
-      const pageHeadings = within(main).getAllByRole('heading', { level: 1 })
-      expect(pageHeadings).toHaveLength(1)
-      expect(pageHeadings[0]).toHaveTextContent(label)
+    const expectPage = async (navigationLabel: string, heading: string) => {
+      await waitFor(() => {
+        const activeItems = within(navigation)
+          .getAllByRole('link')
+          .filter((link) => link.getAttribute('aria-current') === 'page')
+        expect(activeItems).toHaveLength(1)
+        expect(activeItems[0]).toHaveAccessibleName(navigationLabel)
+        const pageHeadings = within(main).getAllByRole('heading', { level: 1 })
+        expect(pageHeadings).toHaveLength(1)
+        expect(pageHeadings[0]).toHaveTextContent(heading)
+      })
     }
 
-    expectPage('资产矩阵')
-    await user.click(within(navigation).getByRole('button', { name: '目标渠道' }))
-    expectPage('目标渠道')
-    await user.click(within(navigation).getByRole('button', { name: '配置漂移' }))
-    expectPage('配置漂移')
-    await user.click(within(navigation).getByRole('button', { name: '设置' }))
-    expectPage('设置')
+    await expectPage('同步工作台', '资产矩阵')
+    await user.click(within(navigation).getByRole('link', { name: '上游连接' }))
+    await expectPage('上游连接', '上游连接')
+    await user.click(within(navigation).getByRole('link', { name: '目标实例' }))
+    await expectPage('目标实例', '目标实例')
+    await user.click(within(navigation).getByRole('link', { name: '漂移修复' }))
+    await expectPage('漂移修复', '配置漂移')
+    await user.click(within(navigation).getByRole('link', { name: '任务记录' }))
+    await expectPage('任务记录', '任务记录')
+    await user.click(within(navigation).getByRole('link', { name: '系统设置' }))
+    await expectPage('系统设置', '设置')
   })
 
   it('shows the running binary version and build time', async () => {
@@ -281,16 +336,16 @@ describe('SyncHub console', () => {
     renderApp()
 
     expect(await screen.findByRole('banner', { name: 'SyncHub 控制台顶栏' })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: '资产矩阵' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '资产矩阵' })).toBeInTheDocument()
     expect(await screen.findByRole('alert')).toHaveTextContent('暂时无法读取资产矩阵')
     const navigation = screen.getByRole('navigation', { name: '主导航' })
-    await user.click(within(navigation).getByRole('button', { name: '配置漂移' }))
+    await user.click(within(navigation).getByRole('link', { name: '漂移修复' }))
     expect(screen.getByRole('heading', { name: '配置漂移' })).toBeInTheDocument()
     expect(screen.getByRole('alert')).toHaveTextContent('暂时无法读取资产矩阵')
     expect(screen.queryByText('当前没有配置漂移')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: '重试' })).toBeEnabled()
 
-    await user.click(within(navigation).getByRole('button', { name: '设置' }))
+    await user.click(within(navigation).getByRole('link', { name: '系统设置' }))
     expect(screen.getByRole('heading', { name: '设置' })).toBeInTheDocument()
   })
 
@@ -585,7 +640,7 @@ describe('SyncHub console', () => {
     renderApp()
 
     await screen.findByText('OpenAI primary')
-    await user.click(screen.getByRole('button', { name: '配置漂移' }))
+    await user.click(screen.getByRole('link', { name: '漂移修复' }))
 
     expect(screen.getByRole('heading', { name: '配置漂移' })).toBeInTheDocument()
     expect(screen.getByText('权重')).toBeInTheDocument()
@@ -646,7 +701,7 @@ describe('SyncHub console', () => {
     renderApp()
 
     await screen.findByText('OpenAI primary')
-    await user.click(screen.getByRole('button', { name: '目标渠道' }))
+    await openTargetChannels(user)
 
     expect(await screen.findByText('Managed OpenAI')).toBeInTheDocument()
     expect(screen.getByText('SyncHub 管理')).toBeInTheDocument()
@@ -698,10 +753,10 @@ describe('SyncHub console', () => {
     renderApp()
 
     await screen.findByText('OpenAI primary')
-    await user.click(screen.getByRole('button', { name: '目标渠道' }))
+    await openTargetChannels(user)
     expect(await screen.findByText('First live channel')).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: '资产矩阵' }))
-    await user.click(screen.getByRole('button', { name: '目标渠道' }))
+    await user.click(screen.getByRole('link', { name: '同步工作台' }))
+    await openTargetChannels(user)
 
     expect(await screen.findByText('Second live channel')).toBeInTheDocument()
     expect(channelReads).toBe(2)
@@ -735,11 +790,11 @@ describe('SyncHub console', () => {
     renderApp()
 
     await screen.findByText('OpenAI primary')
-    await user.click(screen.getByRole('button', { name: '目标渠道' }))
+    await openTargetChannels(user)
     await screen.findByText('Managed OpenAI')
     await user.click(screen.getByRole('button', { name: '删除渠道 Managed OpenAI' }))
     await user.click(within(screen.getByRole('dialog', { name: '删除目标渠道' })).getByRole('button', { name: '确认删除' }))
-    await user.click(screen.getByRole('button', { name: '资产矩阵' }))
+    await user.click(screen.getByRole('link', { name: '同步工作台' }))
 
     const matrixTable = document.querySelector<HTMLElement>('.matrix-table')
     expect(matrixTable).not.toBeNull()
@@ -762,7 +817,7 @@ describe('SyncHub console', () => {
     renderApp()
 
     await screen.findByText('OpenAI primary')
-    await user.click(screen.getByRole('button', { name: '设置' }))
+    await user.click(screen.getByRole('link', { name: '系统设置' }))
     await user.click(screen.getByRole('button', { name: '添加目标实例' }))
 
     const dialog = screen.getByRole('dialog', { name: '添加目标实例' })
@@ -792,7 +847,7 @@ describe('SyncHub console', () => {
     renderApp()
 
     await screen.findByText('OpenAI primary')
-    await user.click(screen.getByRole('button', { name: '设置' }))
+    await user.click(screen.getByRole('link', { name: '系统设置' }))
     await user.click(screen.getByRole('button', { name: '添加上游实例' }))
 
     const dialog = screen.getByRole('dialog', { name: '添加上游实例' })
@@ -826,7 +881,7 @@ describe('SyncHub console', () => {
     renderApp()
 
     await screen.findByText('OpenAI primary')
-    await user.click(screen.getByRole('button', { name: '设置' }))
+    await user.click(screen.getByRole('link', { name: '系统设置' }))
     await user.click(screen.getByRole('button', { name: '添加目标实例' }))
     const dialog = screen.getByRole('dialog', { name: '添加目标实例' })
     await user.type(within(dialog).getByLabelText('实例 ID'), 'target-with-user')
@@ -868,7 +923,7 @@ describe('SyncHub console', () => {
     renderApp()
 
     await screen.findByText('OpenAI primary')
-    await user.click(screen.getByRole('button', { name: '设置' }))
+    await user.click(screen.getByRole('link', { name: '系统设置' }))
     expect(screen.getByText('用户 ID 41')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '编辑目标实例 Target Alpha' }))
     const dialog = screen.getByRole('dialog', { name: '编辑目标实例' })
@@ -901,7 +956,7 @@ describe('SyncHub console', () => {
     renderApp()
 
     await screen.findByText('OpenAI primary')
-    await user.click(screen.getByRole('button', { name: '设置' }))
+    await user.click(screen.getByRole('link', { name: '系统设置' }))
     await user.click(screen.getByRole('button', { name: '添加上游实例' }))
     const dialog = screen.getByRole('dialog', { name: '添加上游实例' })
     await user.type(within(dialog).getByLabelText('实例 ID'), 'source-switched')
@@ -965,7 +1020,7 @@ describe('SyncHub console', () => {
     renderApp()
 
     await screen.findByText('OpenAI primary')
-    await user.click(screen.getByRole('button', { name: '设置' }))
+    await user.click(screen.getByRole('link', { name: '系统设置' }))
     await user.click(screen.getByRole('button', { name: '添加上游实例' }))
     const dialog = screen.getByRole('dialog', { name: '添加上游实例' })
     expect(within(dialog).getByRole('option', { name: 'New API' })).toBeInTheDocument()
@@ -1025,14 +1080,14 @@ describe('SyncHub console', () => {
     expect(menuButton).toHaveAttribute('aria-expanded', 'true')
     const mobileNavigation = screen.getByRole('navigation', { name: '移动端主导航' })
     expect(mobileNavigation).toHaveAttribute('data-open', 'true')
-    const activeMobileItem = within(mobileNavigation).getByRole('button', { name: '资产矩阵' })
-    const lastMobileItem = within(mobileNavigation).getByRole('button', { name: '设置' })
+    const activeMobileItem = within(mobileNavigation).getByRole('link', { name: '同步工作台' })
+    const lastMobileItem = within(mobileNavigation).getByRole('link', { name: '系统设置' })
     expect(activeMobileItem).toHaveFocus()
     await fireEvent.keyDown(document, { key: 'Tab', shiftKey: true })
     expect(lastMobileItem).toHaveFocus()
     await fireEvent.keyDown(document, { key: 'Tab' })
     expect(activeMobileItem).toHaveFocus()
-    await user.click(within(mobileNavigation).getByRole('button', { name: '设置' }))
+    await user.click(within(mobileNavigation).getByRole('link', { name: '系统设置' }))
 
     expect(menuButton).toHaveAttribute('aria-expanded', 'false')
     expect(screen.getByRole('heading', { name: '设置' })).toBeInTheDocument()
@@ -1116,7 +1171,7 @@ describe('SyncHub console', () => {
     renderApp()
 
     await screen.findByText('OpenAI primary')
-    await user.click(screen.getByRole('button', { name: '目标渠道' }))
+    await openTargetChannels(user)
     expect(await screen.findByRole('alert')).toHaveTextContent('目标暂时不可用')
     await user.click(screen.getByRole('button', { name: '重试' }))
     await screen.findByText('Managed channel')
@@ -1148,7 +1203,7 @@ describe('SyncHub console', () => {
     renderApp()
 
     await screen.findByText('OpenAI primary')
-    await user.click(within(screen.getByRole('navigation', { name: '主导航' })).getByRole('button', { name: '设置' }))
+    await user.click(within(screen.getByRole('navigation', { name: '主导航' })).getByRole('link', { name: '系统设置' }))
 
     const tablist = screen.getByRole('tablist', { name: '设置分类' })
     const instanceTab = within(tablist).getByRole('tab', { name: '实例管理' })
@@ -1210,7 +1265,7 @@ describe('SyncHub console', () => {
     renderApp()
 
     await screen.findByText('OpenAI primary')
-    await user.click(screen.getByRole('button', { name: '设置' }))
+    await user.click(screen.getByRole('link', { name: '系统设置' }))
     await user.click(screen.getByRole('button', { name: '添加上游实例' }))
     const addDialog = screen.getByRole('dialog', { name: '添加上游实例' })
     await user.type(within(addDialog).getByLabelText('实例 ID'), 'source-generic-crud')
@@ -1425,7 +1480,7 @@ describe('SyncHub console', () => {
     renderApp()
 
     await screen.findByText('OpenAI primary')
-    await user.click(screen.getByRole('button', { name: '配置漂移' }))
+    await user.click(screen.getByRole('link', { name: '漂移修复' }))
     await user.click(screen.getByRole('button', { name: '校验全部目标' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('部分目标校验失败')

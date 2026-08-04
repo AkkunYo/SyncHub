@@ -1,35 +1,40 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   Activity,
+  Cloud,
   DatabaseZap,
   GitCompareArrows,
+  ListChecks,
   Menu,
   PanelLeftClose,
-  RadioTower,
+  Server,
   Settings,
 } from 'lucide-vue-next'
+import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 
-import ChannelsPage from '@/pages/ChannelsPage.vue'
-import DriftPage from '@/pages/DriftPage.vue'
-import MatrixPage from '@/pages/MatrixPage.vue'
-import SettingsPage from '@/pages/SettingsPage.vue'
+import type { NavigationId } from '@/router'
 import { useConsoleStore } from '@/stores/console'
 import type { ViewName } from '@/types'
 
 const store = useConsoleStore()
+const route = useRoute()
+const router = useRouter()
 const mobileNavOpen = ref(false)
 const mobileMenuButton = ref<HTMLButtonElement | null>(null)
 const mobileNav = ref<HTMLElement | null>(null)
 const mainContent = ref<HTMLElement | null>(null)
 
 const navItems = [
-  { id: 'matrix' as const, label: '资产矩阵', icon: DatabaseZap },
-  { id: 'channels' as const, label: '目标渠道', icon: RadioTower },
-  { id: 'drift' as const, label: '配置漂移', icon: GitCompareArrows },
-  { id: 'settings' as const, label: '设置', icon: Settings },
+  { id: 'sync' as const, label: '同步工作台', to: '/sync', icon: DatabaseZap },
+  { id: 'upstreams' as const, label: '上游连接', to: '/upstreams', icon: Cloud },
+  { id: 'targets' as const, label: '目标实例', to: '/targets', icon: Server },
+  { id: 'drift' as const, label: '漂移修复', to: '/drift', icon: GitCompareArrows },
+  { id: 'tasks' as const, label: '任务记录', to: '/tasks', icon: ListChecks },
+  { id: 'settings' as const, label: '系统设置', to: '/settings', icon: Settings },
 ]
 
+const activeNavigationId = computed(() => route.meta.navigationId as NavigationId | undefined)
 const driftCount = computed(() => store.driftItems.length)
 const healthStatusLabel = computed(() => {
   if (store.healthState === 'loading') return '检测中'
@@ -45,8 +50,8 @@ function formattedBuildDate(value: string): string {
 }
 
 function focusActiveMobileNavItem(): void {
-  const activeItem = mobileNav.value?.querySelector<HTMLButtonElement>('[aria-current="page"]')
-  const firstItem = mobileNav.value?.querySelector<HTMLButtonElement>('button:not([disabled])')
+  const activeItem = mobileNav.value?.querySelector<HTMLElement>('[aria-current="page"]')
+  const firstItem = mobileNav.value?.querySelector<HTMLElement>('a[href], button:not([disabled])')
   ;(activeItem ?? firstItem)?.focus()
 }
 
@@ -69,10 +74,8 @@ function toggleMobileNav(): void {
   else openMobileNav()
 }
 
-function navigate(view: ViewName): void {
-  const fromMobileNav = mobileNavOpen.value
-  store.navigate(view)
-  if (fromMobileNav) closeMobileNav('content')
+function closeMobileNavAfterNavigation(): void {
+  if (mobileNavOpen.value) closeMobileNav('content')
 }
 
 function onKeydown(event: KeyboardEvent): void {
@@ -84,7 +87,9 @@ function onKeydown(event: KeyboardEvent): void {
   }
   if (event.key !== 'Tab' || !mobileNav.value) return
 
-  const focusableItems = [...mobileNav.value.querySelectorAll<HTMLButtonElement>('button:not([disabled])')]
+  const focusableItems = [
+    ...mobileNav.value.querySelectorAll<HTMLElement>('a[href], button:not([disabled])'),
+  ]
   if (focusableItems.length === 0) {
     event.preventDefault()
     mobileNav.value.focus()
@@ -101,6 +106,39 @@ function onKeydown(event: KeyboardEvent): void {
     firstItem?.focus()
   }
 }
+
+function routeForLegacyView(view: ViewName) {
+  if (view === 'matrix') return { name: 'sync' }
+  if (view === 'drift') return { name: 'drift' }
+  if (view === 'settings') return { name: 'settings' }
+  return store.selectedTargetId
+    ? { name: 'target-channels', params: { id: store.selectedTargetId } }
+    : { name: 'targets' }
+}
+
+watch(
+  () => store.activeView,
+  (view) => {
+    if (route.meta.legacyView === view) return
+    void router.push(routeForLegacyView(view))
+  },
+)
+
+watch(
+  () => [route.meta.legacyView, route.params.id, store.initialState] as const,
+  ([legacyView, routeTargetId, initialState]) => {
+    if (legacyView && store.activeView !== legacyView) store.activeView = legacyView
+    if (legacyView !== 'channels' || initialState !== 'ready') return
+
+    const targetId = Array.isArray(routeTargetId) ? routeTargetId[0] : routeTargetId
+    if (!targetId || !store.targets.some((target) => target.id === targetId)) {
+      void router.replace({ name: 'targets' })
+      return
+    }
+    void store.loadChannels(targetId)
+  },
+  { immediate: true },
+)
 
 onMounted(() => {
   document.addEventListener('keydown', onKeydown)
@@ -164,18 +202,17 @@ onUnmounted(() => {
     <aside class="desktop-sidebar">
       <p class="nav-section-label">工作区</p>
       <nav class="side-nav" aria-label="主导航">
-        <button
+        <RouterLink
           v-for="item in navItems"
           :key="item.id"
-          type="button"
-          :class="{ active: store.activeView === item.id }"
-          :aria-current="store.activeView === item.id ? 'page' : undefined"
-          @click="navigate(item.id)"
+          :to="item.to"
+          :class="{ active: activeNavigationId === item.id }"
+          :aria-current="activeNavigationId === item.id ? 'page' : undefined"
         >
           <component :is="item.icon" :size="18" aria-hidden="true" />
           <span>{{ item.label }}</span>
           <span v-if="item.id === 'drift' && driftCount" class="nav-count" aria-hidden="true">{{ driftCount }}</span>
-        </button>
+        </RouterLink>
       </nav>
       <div class="sidebar-status">
         <span class="health-dot" :class="healthStatusClass" aria-hidden="true"></span>
@@ -206,18 +243,18 @@ onUnmounted(() => {
         tabindex="-1"
       >
         <p class="nav-section-label">工作区</p>
-        <button
+        <RouterLink
           v-for="item in navItems"
           :key="item.id"
-          type="button"
-          :class="{ active: store.activeView === item.id }"
-          :aria-current="store.activeView === item.id ? 'page' : undefined"
-          @click="navigate(item.id)"
+          :to="item.to"
+          :class="{ active: activeNavigationId === item.id }"
+          :aria-current="activeNavigationId === item.id ? 'page' : undefined"
+          @click="closeMobileNavAfterNavigation"
         >
           <component :is="item.icon" :size="18" aria-hidden="true" />
           <span>{{ item.label }}</span>
           <span v-if="item.id === 'drift' && driftCount" class="nav-count" aria-hidden="true">{{ driftCount }}</span>
-        </button>
+        </RouterLink>
         <div class="sidebar-status">
           <span class="health-dot" :class="healthStatusClass" aria-hidden="true"></span>
           <div>
@@ -232,10 +269,7 @@ onUnmounted(() => {
     </template>
 
     <main id="main-content" ref="mainContent" class="app-main" tabindex="-1">
-      <MatrixPage v-if="store.activeView === 'matrix'" />
-      <ChannelsPage v-else-if="store.activeView === 'channels'" />
-      <DriftPage v-else-if="store.activeView === 'drift'" />
-      <SettingsPage v-else />
+      <RouterView />
     </main>
   </div>
 </template>
