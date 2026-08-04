@@ -229,6 +229,26 @@ describe('SyncHub console', () => {
     }
   })
 
+  it('opens resource details from the upstream and target lists', async () => {
+    installConsoleApi()
+    const user = userEvent.setup()
+
+    renderApp()
+
+    const navigation = await screen.findByRole('navigation', { name: '主导航' })
+    await user.click(within(navigation).getByRole('link', { name: '上游连接' }))
+    const upstreamDetails = screen.getByRole('link', { name: '查看 Source Alpha 详情' })
+    expect(upstreamDetails).toHaveAttribute('href', '/upstreams/source-a')
+    await user.click(upstreamDetails)
+    expect(screen.getByRole('heading', { name: '上游详情' })).toBeInTheDocument()
+
+    await user.click(within(navigation).getByRole('link', { name: '目标实例' }))
+    const targetOverview = screen.getByRole('link', { name: '查看 Target Alpha 概览' })
+    expect(targetOverview).toHaveAttribute('href', '/targets/target-a')
+    await user.click(targetOverview)
+    expect(screen.getByRole('heading', { name: '目标概览' })).toBeInTheDocument()
+  })
+
   it('loads the target selected by a direct channel route', async () => {
     const fetchMock = installFetch((url) => {
       if (url.pathname === '/api/v1/health') {
