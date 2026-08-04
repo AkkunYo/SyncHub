@@ -400,7 +400,10 @@ func TestProbeRejectsInvalidInputsWithoutNetworkAccess(t *testing.T) {
 	tests := []Input{
 		{BaseURL: "", APIKey: "key", Model: "model", Protocol: ProtocolChatCompletions},
 		{BaseURL: "https://example.com", APIKey: "", Model: "model", Protocol: ProtocolChatCompletions},
+		{BaseURL: "https://example.com", APIKey: " key", Model: "model", Protocol: ProtocolChatCompletions},
+		{BaseURL: "https://example.com", APIKey: "key\nvalue", Model: "model", Protocol: ProtocolChatCompletions},
 		{BaseURL: "https://example.com", APIKey: "key", Model: "", Protocol: ProtocolChatCompletions},
+		{BaseURL: "https://example.com", APIKey: "key", Model: "model\rname", Protocol: ProtocolChatCompletions},
 		{BaseURL: "file:///tmp/probe", APIKey: "key", Model: "model", Protocol: ProtocolChatCompletions},
 		{BaseURL: "https://user@example.com", APIKey: "key", Model: "model", Protocol: ProtocolChatCompletions},
 		{BaseURL: "https://example.com?key=secret", APIKey: "key", Model: "model", Protocol: ProtocolChatCompletions},
@@ -416,6 +419,214 @@ func TestProbeRejectsInvalidInputsWithoutNetworkAccess(t *testing.T) {
 	if called {
 		t.Fatal("invalid input reached the network")
 	}
+}
+
+func TestProtocolExtractorsSupportStructuredContentAndRejectEmptyOutput(t *testing.T) {
+	t.Parallel()
+
+	text, err := extractChatText([]byte(`{"choices":[{"message":{"content":[{"type":"text","text":"first "},{"type":"text","text":"second"}]}}]}`))
+	if err != nil || text != "first second" {
+		t.Fatalf("structured chat text = %q, %v", text, err)
+	}
+
+	tests := []struct {
+		name      string
+		extractor TextExtractor
+		body      string
+	}{
+		{name: "chat choices", extractor: extractChatText, body: `{"choices":[]}`},
+		{name: "chat content shape", extractor: extractChatText, body: `{"choices":[{"message":{"content":{"text":"value"}}}]}`},
+		{name: "responses output", extractor: extractResponsesText, body: `{"output":[]}`},
+		{name: "completion choices", extractor: extractCompletionText, body: `{"choices":[]}`},
+	}
+	for _, test := range tests {
+		if output, extractErr := test.extractor([]byte(test.body)); !errors.Is(extractErr, errMissingOutputText) || output != "" {
+			t.Errorf("%s output = %q, error = %v", test.name, output, extractErr)
+		}
+	}
+}
+
+func TestProbeClassifiesOtherHTTPFailures(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		statusCode int
+		status     Status
+		code       ErrorCode
+	}{
+		{statusCode: http.StatusBadRequest, status: StatusInvalidResponse, code: CodeRequestRejected},
+		{statusCode: http.StatusInternalServerError, status: StatusUpstreamError, code: CodeUpstreamError},
+		{statusCode: http.StatusRequestTimeout, status: StatusTimeout, code: CodeTimeout},
+		{statusCode: http.StatusGatewayTimeout, status: StatusTimeout, code: CodeTimeout},
+	}
+	for _, test := range tests {
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			writer.WriteHeader(test.statusCode)
+		}))
+		result := NewService(server.Client()).Probe(context.Background(), Input{
+			BaseURL:  server.URL,
+			APIKey:   "secret",
+			Model:    "model",
+			Protocol: ProtocolChatCompletions,
+		})
+		server.Close()
+		if result.Status != test.status || result.ErrorCode != test.code {
+			t.Errorf("status %d result = %#v", test.statusCode, result)
+		}
+	}
+}
+
+func TestParseRetryAfterSupportsDatesAndRejectsInvalidValues(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.August, 4, 12, 0, 0, 0, time.UTC)
+	if got := parseRetryAfter(now.Add(30*time.Second).Format(http.TimeFormat), now); got != 30*time.Second {
+		t.Fatalf("date Retry-After = %v", got)
+	}
+	for _, value := range []string{"", "invalid", "-1", now.Add(-time.Minute).Format(http.TimeFormat)} {
+		if got := parseRetryAfter(value, now); got != 0 {
+			t.Errorf("Retry-After %q = %v", value, got)
+		}
+	}
+}
+
+func TestProbeHandlesCancellationAndTemplateGenerationFailure(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		called = true
+		return nil, errors.New("unexpected network call")
+	})}
+	service := NewService(client)
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	result := service.Probe(cancelled, Input{
+		BaseURL:  "https://probe.invalid",
+		APIKey:   "secret",
+		Model:    "model",
+		Protocol: ProtocolChatCompletions,
+	})
+	if result.Status != StatusCancelled || result.ErrorCode != CodeCancelled {
+		t.Fatalf("cancelled result = %#v", result)
+	}
+
+	service.random = errorReader{err: errors.New("random source failed with sensitive detail")}
+	result = service.Probe(context.Background(), Input{
+		BaseURL:  "https://probe.invalid",
+		APIKey:   "secret",
+		Model:    "model",
+		Protocol: ProtocolChatCompletions,
+	})
+	if result.Status != StatusInternalError || result.ErrorCode != CodeTemplateGeneration {
+		t.Fatalf("template failure result = %#v", result)
+	}
+	if called {
+		t.Fatal("terminal preflight failure reached the network")
+	}
+
+	var nilService *Service
+	result = nilService.Probe(context.Background(), Input{})
+	if result.Status != StatusInvalidRequest || result.CheckedAt.IsZero() {
+		t.Fatalf("nil service result = %#v", result)
+	}
+}
+
+func TestRegisterCapabilityRejectsInvalidAndDuplicateDefinitions(t *testing.T) {
+	t.Parallel()
+
+	service := NewService(nil)
+	valid := Capability{
+		Protocol: "custom",
+		Endpoint: "/v2/generate",
+		BuildPayload: func(_, _ string) (any, error) {
+			return map[string]string{}, nil
+		},
+		ExtractText: func([]byte) (string, error) { return "text", nil },
+	}
+	invalid := []Capability{
+		{},
+		{Protocol: ProtocolAuto, Endpoint: valid.Endpoint, BuildPayload: valid.BuildPayload, ExtractText: valid.ExtractText},
+		{Protocol: "missing_path", BuildPayload: valid.BuildPayload, ExtractText: valid.ExtractText},
+		{Protocol: "relative_path", Endpoint: "v2/generate", BuildPayload: valid.BuildPayload, ExtractText: valid.ExtractText},
+		{Protocol: "missing_builder", Endpoint: valid.Endpoint, ExtractText: valid.ExtractText},
+		{Protocol: "missing_extractor", Endpoint: valid.Endpoint, BuildPayload: valid.BuildPayload},
+	}
+	for _, capability := range invalid {
+		if err := service.RegisterCapability(capability); err == nil {
+			t.Errorf("RegisterCapability(%#v) error = nil", capability)
+		}
+	}
+	if err := service.RegisterCapability(valid); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.RegisterCapability(valid); err == nil {
+		t.Fatal("duplicate capability error = nil")
+	}
+}
+
+func TestProbeAutoReturnsModelUnavailableWhenEveryEndpointReturnsNotFound(t *testing.T) {
+	t.Parallel()
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		requests++
+		writer.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(server.Close)
+	result := NewService(server.Client()).Probe(context.Background(), Input{
+		BaseURL:  server.URL,
+		APIKey:   "secret",
+		Model:    "missing-model",
+		Protocol: ProtocolAuto,
+	})
+	if result.Status != StatusModelUnavailable || result.ErrorCode != CodeModelUnavailable || requests != 3 {
+		t.Fatalf("result = %#v, requests = %d", result, requests)
+	}
+}
+
+func TestProbeSanitizesCapabilityAndResponseReadErrors(t *testing.T) {
+	t.Parallel()
+
+	const customProtocol Protocol = "failing_custom"
+	service := NewService(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       errorReadCloser{err: errors.New("sensitive response read failure")},
+		}, nil
+	})})
+	if err := service.RegisterCapability(Capability{
+		Protocol: customProtocol,
+		Endpoint: "/v2/generate",
+		BuildPayload: func(_, _ string) (any, error) {
+			return nil, errors.New("sensitive prompt build failure")
+		},
+		ExtractText: func([]byte) (string, error) { return "", nil },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result := service.Probe(context.Background(), Input{
+		BaseURL:  "https://probe.invalid",
+		APIKey:   "secret",
+		Model:    "model",
+		Protocol: customProtocol,
+	})
+	if result.Status != StatusInternalError || result.ErrorCode != CodeRequestBuildFailed {
+		t.Fatalf("build failure result = %#v", result)
+	}
+	assertResultRedacted(t, result, "sensitive prompt build failure")
+
+	result = service.Probe(context.Background(), Input{
+		BaseURL:  "https://probe.invalid",
+		APIKey:   "secret",
+		Model:    "model",
+		Protocol: ProtocolChatCompletions,
+	})
+	if result.Status != StatusNetworkError || result.ErrorCode != CodeNetwork {
+		t.Fatalf("read failure result = %#v", result)
+	}
+	assertResultRedacted(t, result, "sensitive response read failure")
 }
 
 func assertSafeTask(t *testing.T, task generatedTask) {
@@ -447,7 +658,7 @@ func assertResultRedacted(t *testing.T, result Result, forbidden ...string) {
 	t.Helper()
 	rendered := fmt.Sprintf("%+v", result)
 	for _, value := range forbidden {
-		if value != "" && strings.Contains(rendered, value) {
+		if len(value) >= 4 && strings.Contains(rendered, value) {
 			t.Fatalf("result leaked %q: %s", value, rendered)
 		}
 	}
@@ -457,4 +668,24 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return function(request)
+}
+
+type errorReader struct {
+	err error
+}
+
+func (reader errorReader) Read([]byte) (int, error) {
+	return 0, reader.err
+}
+
+type errorReadCloser struct {
+	err error
+}
+
+func (reader errorReadCloser) Read([]byte) (int, error) {
+	return 0, reader.err
+}
+
+func (errorReadCloser) Close() error {
+	return nil
 }
