@@ -134,6 +134,78 @@ func TestAdapterResolverForwardsGenericNameURLAndAPIKey(t *testing.T) {
 	}
 }
 
+func TestAdapterResolverUsesAllGenericKeysAndInvalidatesTheirCacheIdentity(t *testing.T) {
+	t.Parallel()
+
+	modelsByAuthorization := map[string]string{
+		"Bearer primary-secret": `{"data":[{"id":"primary-model"}]}`,
+		"Bearer backup-secret":  `{"data":[{"id":"backup-model"}]}`,
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		payload, ok := modelsByAuthorization[r.Header.Get("Authorization")]
+		if !ok {
+			t.Errorf("unexpected Authorization header %q", r.Header.Get("Authorization"))
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		_, _ = io.WriteString(w, payload)
+	}))
+	t.Cleanup(server.Close)
+
+	resolver := NewAdapterResolver(&memoryConfigStore{cfg: config.Default()}, server.Client())
+	cfg := config.UpstreamConfig{
+		ID: "generic-source", Name: "Shared Endpoint", Type: "generic", BaseURL: server.URL,
+		Keys: []config.GenericKeyConfig{
+			{ID: config.DefaultGenericKeyID, Name: "Primary", APIKey: "primary-secret", Enabled: true},
+			{ID: "backup", Name: "Backup", APIKey: "backup-secret", Enabled: true},
+		},
+	}
+	first, err := resolver.ResolveUpstream(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("ResolveUpstream() error = %v", err)
+	}
+	page, err := first.ListAssets(context.Background(), platform.PageCursor{})
+	if err != nil {
+		t.Fatalf("ListAssets() error = %v", err)
+	}
+	if len(page.Assets) != 2 || page.Assets[0].ID != "generic-source:endpoint" || page.Assets[1].ID != "generic-source:key:backup" {
+		t.Fatalf("generic assets = %#v", page.Assets)
+	}
+	if !reflect.DeepEqual(page.Assets[0].Models, []string{"primary-model"}) || !reflect.DeepEqual(page.Assets[1].Models, []string{"backup-model"}) {
+		t.Fatalf("generic models = %#v", page.Assets)
+	}
+	cached, err := resolver.ResolveUpstream(context.Background(), cfg)
+	if err != nil || cached != first {
+		t.Fatalf("unchanged config did not reuse adapter: adapter=%p error=%v", cached, err)
+	}
+
+	mutations := []struct {
+		name   string
+		mutate func(*config.UpstreamConfig)
+	}{
+		{name: "key ID", mutate: func(value *config.UpstreamConfig) { value.Keys[1].ID = "backup-2" }},
+		{name: "key name", mutate: func(value *config.UpstreamConfig) { value.Keys[1].Name = "Backup 2" }},
+		{name: "enabled state", mutate: func(value *config.UpstreamConfig) { value.Keys[1].Enabled = false }},
+		{name: "configured models", mutate: func(value *config.UpstreamConfig) { value.Keys[1].Models = []string{"manual-model"} }},
+		{name: "credential", mutate: func(value *config.UpstreamConfig) { value.Keys[1].APIKey = "replacement-secret" }},
+	}
+	previous := first
+	for _, test := range mutations {
+		nextConfig := cfg
+		nextConfig.Keys = append([]config.GenericKeyConfig(nil), cfg.Keys...)
+		test.mutate(&nextConfig)
+		next, resolveErr := resolver.ResolveUpstream(context.Background(), nextConfig)
+		if resolveErr != nil {
+			t.Fatalf("ResolveUpstream(%s) error = %v", test.name, resolveErr)
+		}
+		if next == previous {
+			t.Fatalf("%s change reused cached generic source", test.name)
+		}
+		previous = next
+		cfg = nextConfig
+	}
+}
+
 func TestAdapterResolverRejectsSub2ApiTargetAndInvalidInputs(t *testing.T) {
 	t.Parallel()
 
