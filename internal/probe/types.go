@@ -3,6 +3,7 @@ package probe
 import (
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -12,6 +13,9 @@ const (
 	TemplateVersion         = "natural-v1"
 	defaultMaxResponseBytes = int64(256 << 10)
 	maxOutputTokens         = 32
+	defaultConnectTimeout   = 3 * time.Second
+	defaultFirstByteTimeout = 15 * time.Second
+	defaultTotalTimeout     = 30 * time.Second
 )
 
 type Protocol string
@@ -27,10 +31,10 @@ type Status string
 
 const (
 	StatusHealthy             Status = "healthy"
-	StatusInconclusive        Status = "inconclusive"
-	StatusUnauthorized        Status = "unauthorized"
+	StatusInconclusive        Status = "reachable_inconclusive"
+	StatusUnauthorized        Status = "authentication_failed"
 	StatusModelUnavailable    Status = "model_unavailable"
-	StatusProtocolUnavailable Status = "protocol_unavailable"
+	StatusProtocolUnavailable Status = "unsupported"
 	StatusRateLimited         Status = "rate_limited"
 	StatusTimeout             Status = "timeout"
 	StatusCancelled           Status = "cancelled"
@@ -107,9 +111,32 @@ type Service struct {
 
 func NewService(client *http.Client) *Service {
 	if client == nil {
-		client = http.DefaultClient
+		client = &http.Client{}
 	}
 	clientCopy := *client
+	if clientCopy.Timeout <= 0 || clientCopy.Timeout > defaultTotalTimeout {
+		clientCopy.Timeout = defaultTotalTimeout
+	}
+	if clientCopy.Transport == nil || clientCopy.Transport == http.DefaultTransport {
+		transport := &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: time.Second,
+		}
+		if defaultTransport, ok := http.DefaultTransport.(*http.Transport); ok {
+			transport = defaultTransport.Clone()
+		}
+		dialer := &net.Dialer{
+			Timeout:   defaultConnectTimeout,
+			KeepAlive: 30 * time.Second,
+		}
+		transport.DialContext = dialer.DialContext
+		transport.ResponseHeaderTimeout = defaultFirstByteTimeout
+		clientCopy.Transport = transport
+	}
 	clientCopy.Jar = nil
 	clientCopy.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse

@@ -270,7 +270,8 @@ func readBounded(reader io.Reader, limit int64) ([]byte, bool, error) {
 func parseRetryAfter(value string, now time.Time) time.Duration {
 	value = strings.TrimSpace(value)
 	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil {
-		if seconds > 0 {
+		const maxDuration = time.Duration(1<<63 - 1)
+		if seconds > 0 && seconds <= int64(maxDuration/time.Second) {
 			return time.Duration(seconds) * time.Second
 		}
 		return 0
