@@ -242,6 +242,63 @@ func TestProbeChecksCurrentKeySnapshotAndRejectsConcurrentUse(t *testing.T) {
 	}
 }
 
+func TestGenericKeyMutationInvalidatesVerifiedSnapshotAndProbeHistory(t *testing.T) {
+	store := newCatalogStore(genericCatalogConfig("https://provider.example.com"))
+	service := NewService(store, http.DefaultClient, &catalogProber{})
+	upstream := store.Snapshot().Upstreams[0]
+	if _, err := service.ListKeys(context.Background(), upstream, &catalogUpstream{}); err != nil {
+		t.Fatal(err)
+	}
+	resource := resourceKey{upstreamID: upstream.ID, keyID: "primary"}
+	service.publish(resource, discoveredModels{
+		models: []string{"verified-model"}, at: time.Date(2026, 8, 5, 7, 0, 0, 0, time.UTC),
+	}, SnapshotScopePersisted)
+	service.mu.Lock()
+	verified := service.snapshots[resource]
+	verified.probes["verified-model"] = ModelProbe{KeyID: "primary", Model: "verified-model", Status: probe.StatusHealthy}
+	service.snapshots[resource] = verified
+	service.mu.Unlock()
+
+	err := service.MutateKey(context.Background(), upstream.ID, "primary", func() error {
+		return store.Update(context.Background(), func(cfg *config.Config) error {
+			cfg.Upstreams[0].Keys[0].APIKey = "rotated-secret"
+			cfg.Upstreams[0].Keys[0].Models = []string{"manual-model"}
+			return nil
+		})
+	})
+	if err != nil {
+		t.Fatalf("MutateKey() error = %v", err)
+	}
+	if inherited, exists := service.Models(upstream.ID, "primary"); exists {
+		t.Fatalf("mutation retained snapshot: %#v", inherited)
+	}
+
+	updated := store.Snapshot().Upstreams[0]
+	if _, err := service.ListKeys(context.Background(), updated, &catalogUpstream{}); err != nil {
+		t.Fatal(err)
+	}
+	current, exists := service.Models(upstream.ID, "primary")
+	if !exists || current.SnapshotStatus != SnapshotUnverified || current.Verified ||
+		!slices.Equal(current.ModelIDs(), []string{"manual-model"}) || current.Models[0].Probe != nil {
+		t.Fatalf("updated snapshot = %#v, exists=%v", current, exists)
+	}
+
+	service.publish(resource, discoveredModels{models: []string{"deleted-model"}, at: time.Now()}, SnapshotScopePersisted)
+	if err := service.MutateKey(context.Background(), upstream.ID, "primary", func() error { return nil }); err != nil {
+		t.Fatalf("delete invalidation error = %v", err)
+	}
+	recreated := updated
+	recreated.Keys[0].APIKey = "recreated-secret"
+	recreated.Keys[0].Models = []string{"recreated-model"}
+	if _, err := service.ListKeys(context.Background(), recreated, &catalogUpstream{}); err != nil {
+		t.Fatal(err)
+	}
+	current, exists = service.Models(upstream.ID, "primary")
+	if !exists || current.Verified || !slices.Equal(current.ModelIDs(), []string{"recreated-model"}) {
+		t.Fatalf("recreated snapshot inherited old state: %#v, exists=%v", current, exists)
+	}
+}
+
 func genericCatalogConfig(baseURL string) config.Config {
 	return config.Config{
 		App: catalogAppConfig(),
