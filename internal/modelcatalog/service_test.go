@@ -299,6 +299,58 @@ func TestGenericKeyMutationInvalidatesVerifiedSnapshotAndProbeHistory(t *testing
 	}
 }
 
+func TestUpstreamMutationInvalidatesEveryKeyAndSerializesWithKeyOperations(t *testing.T) {
+	store := newCatalogStore(genericCatalogConfig("https://provider.example.com"))
+	store.cfg.Upstreams[0].Keys = append(store.cfg.Upstreams[0].Keys, config.GenericKeyConfig{
+		ID: "backup", Name: "Backup", APIKey: "backup-secret", Enabled: true, Models: []string{"backup-model"},
+	})
+	service := NewService(store, http.DefaultClient, &catalogProber{})
+	upstream := store.Snapshot().Upstreams[0]
+	if _, err := service.ListKeys(context.Background(), upstream, &catalogUpstream{}); err != nil {
+		t.Fatal(err)
+	}
+	service.publish(resourceKey{upstream.ID, "primary"}, discoveredModels{models: []string{"old-primary"}, at: time.Now()}, SnapshotScopePersisted)
+	service.publish(resourceKey{upstream.ID, "backup"}, discoveredModels{models: []string{"old-backup"}, at: time.Now()}, SnapshotScopePersisted)
+
+	active := resourceKey{upstream.ID, "primary"}
+	if !service.limiter.tryKey(active) {
+		t.Fatal("failed to establish active key fixture")
+	}
+	if err := service.MutateUpstream(context.Background(), upstream.ID, func() error { return nil }); !errors.Is(err, ErrOperationInProgress) {
+		t.Fatalf("upstream mutation during key operation error = %v", err)
+	}
+	service.limiter.releaseKey(active)
+
+	err := service.MutateUpstream(context.Background(), upstream.ID, func() error {
+		return store.Update(context.Background(), func(cfg *config.Config) error {
+			cfg.Upstreams[0].BaseURL = "https://rotated.example.com"
+			cfg.Upstreams[0].Keys[0].APIKey = "rotated-primary"
+			return nil
+		})
+	})
+	if err != nil {
+		t.Fatalf("MutateUpstream() error = %v", err)
+	}
+	for _, keyID := range []string{"primary", "backup"} {
+		if inherited, exists := service.Models(upstream.ID, keyID); exists {
+			t.Fatalf("upstream mutation retained %s snapshot: %#v", keyID, inherited)
+		}
+	}
+
+	recreated := store.Snapshot().Upstreams[0]
+	recreated.Keys[0].Models = []string{"recreated-primary"}
+	recreated.Keys[1].Models = []string{"recreated-backup"}
+	if _, err := service.ListKeys(context.Background(), recreated, &catalogUpstream{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, keyID := range []string{"primary", "backup"} {
+		current, exists := service.Models(upstream.ID, keyID)
+		if !exists || current.Verified || current.SnapshotStatus != SnapshotUnverified {
+			t.Fatalf("recreated %s inherited runtime state: %#v, exists=%v", keyID, current, exists)
+		}
+	}
+}
+
 func genericCatalogConfig(baseURL string) config.Config {
 	return config.Config{
 		App: catalogAppConfig(),
