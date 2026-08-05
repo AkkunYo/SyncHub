@@ -75,6 +75,13 @@ function envelope(data: unknown, status = 200): Response {
   })
 }
 
+function failure(code: string, message: string, status = 502): Response {
+  return new Response(
+    JSON.stringify({ success: false, error: { code, message }, request_id: 'req-ui-error' }),
+    { status, headers: { 'Content-Type': 'application/json' } },
+  )
+}
+
 async function renderPage(page: typeof UpstreamsPage | typeof TargetsPage, path: string) {
   const pinia = createPinia()
   const router = createRouter({
@@ -105,6 +112,81 @@ afterEach(() => {
 })
 
 describe('Upstream connections workspace', () => {
+  it('recovers from loading errors and clears all URL-backed filters', async () => {
+    const user = userEvent.setup()
+    const { router, store } = await renderPage(
+      UpstreamsPage,
+      '/upstreams?q=missing&type=generic&status=failed',
+    )
+
+    expect(screen.getByText('没有匹配的上游连接')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '清除筛选' }))
+    await waitFor(() => expect(router.currentRoute.value.query).toEqual({}))
+    expect(screen.getByText('New API 用户源')).toBeInTheDocument()
+    expect(screen.getByText('通用生产源')).toBeInTheDocument()
+
+    store.initialState = 'loading'
+    expect(await screen.findByRole('status')).toHaveTextContent('正在加载上游连接')
+
+    const reload = vi.spyOn(store, 'loadConsole').mockResolvedValue()
+    store.initialError = ''
+    store.initialState = 'error'
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('上游连接加载失败')
+    await user.click(within(alert).getByRole('button', { name: '重试' }))
+    expect(reload).toHaveBeenCalledOnce()
+  })
+
+  it('guides users through New API and generic connection validation errors', async () => {
+    const user = userEvent.setup()
+    await renderPage(UpstreamsPage, '/upstreams')
+
+    await user.click(screen.getByRole('button', { name: '添加上游连接' }))
+    const drawer = screen.getByRole('dialog', { name: '添加上游连接' })
+    const save = within(drawer).getByRole('button', { name: '保存上游' })
+
+    await user.click(save)
+    expect(within(drawer).getByRole('alert')).toHaveTextContent('连接 ID 和名称不能为空')
+
+    await user.type(within(drawer).getByLabelText('连接 ID'), 'bad id')
+    await user.type(within(drawer).getByLabelText('连接名称'), '待校验连接')
+    await user.click(save)
+    expect(within(drawer).getByRole('alert')).toHaveTextContent('连接 ID 格式无效')
+
+    await user.clear(within(drawer).getByLabelText('连接 ID'))
+    await user.type(within(drawer).getByLabelText('连接 ID'), 'source-new')
+    await user.type(within(drawer).getByLabelText('Base URL'), 'ftp://source.example.com')
+    await user.click(save)
+    expect(within(drawer).getByRole('alert')).toHaveTextContent('请输入不含凭证的绝对 HTTP(S) 地址')
+
+    await user.clear(within(drawer).getByLabelText('Base URL'))
+    await user.type(within(drawer).getByLabelText('Base URL'), 'https://source.example.com/')
+    await user.click(save)
+    expect(within(drawer).getByRole('alert')).toHaveTextContent('普通用户管理 Token 不能为空')
+
+    await user.click(within(drawer).getByRole('radio', { name: '通用 OpenAI-compatible' }))
+    await user.click(save)
+    expect(within(drawer).getByRole('alert')).toHaveTextContent('第 1 个 Key 信息不完整')
+
+    await user.type(within(drawer).getByLabelText('第 1 个 Key ID'), 'bad id')
+    await user.type(within(drawer).getByLabelText('第 1 个 Key 别名'), '主 Key')
+    await user.type(within(drawer).getByLabelText('第 1 个 API Key'), 'sk-primary')
+    await user.click(save)
+    expect(within(drawer).getByRole('alert')).toHaveTextContent('第 1 个 Key ID 格式无效')
+
+    await user.clear(within(drawer).getByLabelText('第 1 个 Key ID'))
+    await user.type(within(drawer).getByLabelText('第 1 个 Key ID'), 'primary')
+    await user.click(within(drawer).getByRole('button', { name: '再添加一个 Key' }))
+    await user.type(within(drawer).getByLabelText('第 2 个 Key ID'), 'primary')
+    await user.type(within(drawer).getByLabelText('第 2 个 Key 别名'), '备用 Key')
+    await user.type(within(drawer).getByLabelText('第 2 个 API Key'), 'sk-backup')
+    await user.click(save)
+    expect(within(drawer).getByRole('alert')).toHaveTextContent('Key ID 不能重复')
+
+    await user.click(within(drawer).getByRole('button', { name: '移除第 2 个 Key' }))
+    expect(within(drawer).queryByLabelText('第 2 个 API Key')).not.toBeInTheDocument()
+  })
+
   it('presents compact searchable rows with honest per-key summaries', async () => {
     const user = userEvent.setup()
     const { router } = await renderPage(UpstreamsPage, '/upstreams')
@@ -209,9 +291,116 @@ describe('Upstream connections workspace', () => {
     expect(await within(row).findByText('验证通过')).toBeInTheDocument()
     expect(within(row).getByText('4 个资源')).toBeInTheDocument()
   })
+
+  it('shows failed validation and supports retrying edits and confirmed deletion', async () => {
+    let updateAttempts = 0
+    let deleteAttempts = 0
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const path = String(input)
+      if (path.endsWith('/connection-tests')) {
+        return failure('upstream_failure', '上游暂时不可达')
+      }
+      if (init.method === 'PUT') {
+        updateAttempts += 1
+        if (updateAttempts === 1) return failure('upstream_failure', '保存上游失败')
+        return envelope({ ...config.upstreams[1], name: '通用生产源（已更新）' })
+      }
+      expect(init.method).toBe('DELETE')
+      deleteAttempts += 1
+      return deleteAttempts === 1
+        ? failure('upstream_failure', '删除上游失败')
+        : envelope({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+    await renderPage(UpstreamsPage, '/upstreams')
+
+    await user.click(screen.getByRole('button', { name: '验证 通用生产源 连接' }))
+    const failedRow = screen.getByRole('row', { name: /通用生产源/ })
+    expect(await within(failedRow).findByText('验证失败')).toBeInTheDocument()
+    expect(within(failedRow).getByText('上游暂时不可达')).toBeInTheDocument()
+    await user.selectOptions(screen.getByLabelText('验证状态'), 'failed')
+    expect(screen.queryByText('New API 用户源')).not.toBeInTheDocument()
+
+    await user.click(within(failedRow).getByRole('button', { name: '编辑 通用生产源' }))
+    let drawer = screen.getByRole('dialog', { name: '编辑上游连接' })
+    const name = within(drawer).getByLabelText('连接名称')
+    await user.clear(name)
+    await user.type(name, '通用生产源（已更新）')
+    await user.click(within(drawer).getByRole('button', { name: '保存上游' }))
+    expect(await within(drawer).findByRole('alert')).toHaveTextContent('保存上游失败')
+    await user.click(within(drawer).getByRole('button', { name: '保存上游' }))
+    expect(await screen.findByText('通用生产源（已更新）')).toBeInTheDocument()
+
+    const updatedRow = screen.getByRole('row', { name: /通用生产源（已更新）/ })
+    await user.click(within(updatedRow).getByRole('button', { name: '编辑 通用生产源（已更新）' }))
+    drawer = screen.getByRole('dialog', { name: '编辑上游连接' })
+    await user.click(within(drawer).getByRole('button', { name: '删除连接' }))
+    expect(within(drawer).getByRole('button', { name: '确认删除连接' })).toBeInTheDocument()
+    await user.click(within(drawer).getByRole('button', { name: '确认删除连接' }))
+    expect(await within(drawer).findByRole('alert')).toHaveTextContent('删除上游失败')
+    await user.click(within(drawer).getByRole('button', { name: '确认删除连接' }))
+    await waitFor(() => expect(screen.queryByText('通用生产源（已更新）')).not.toBeInTheDocument())
+  })
 })
 
 describe('Target instances workspace', () => {
+  it('recovers from loading errors and clears target URL filters', async () => {
+    const user = userEvent.setup()
+    const { router, store } = await renderPage(
+      TargetsPage,
+      '/targets?q=missing&type=cliproxyapi&status=verified',
+    )
+
+    expect(screen.getByText('没有匹配的目标实例')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '清除筛选' }))
+    await waitFor(() => expect(router.currentRoute.value.query).toEqual({}))
+    expect(screen.getByText('生产 New API')).toBeInTheDocument()
+    expect(screen.getByText('备用 CPA')).toBeInTheDocument()
+
+    store.initialState = 'loading'
+    expect(await screen.findByRole('status')).toHaveTextContent('正在加载目标实例')
+
+    const reload = vi.spyOn(store, 'loadConsole').mockResolvedValue()
+    store.initialError = '目标配置读取失败'
+    store.initialState = 'error'
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('目标配置读取失败')
+    await user.click(within(alert).getByRole('button', { name: '重试' }))
+    expect(reload).toHaveBeenCalledOnce()
+  })
+
+  it('guides users through target identity, endpoint, credential, and user validation', async () => {
+    const user = userEvent.setup()
+    await renderPage(TargetsPage, '/targets')
+
+    await user.click(screen.getByRole('button', { name: '添加目标实例' }))
+    const drawer = screen.getByRole('dialog', { name: '添加目标实例' })
+    const save = within(drawer).getByRole('button', { name: '保存目标' })
+
+    await user.click(save)
+    expect(within(drawer).getByRole('alert')).toHaveTextContent('实例 ID 和名称不能为空')
+    await user.type(within(drawer).getByLabelText('实例 ID'), 'bad id')
+    await user.type(within(drawer).getByLabelText('实例名称'), '待校验目标')
+    await user.click(save)
+    expect(within(drawer).getByRole('alert')).toHaveTextContent('实例 ID 格式无效')
+
+    await user.clear(within(drawer).getByLabelText('实例 ID'))
+    await user.type(within(drawer).getByLabelText('实例 ID'), 'target-new')
+    await user.type(within(drawer).getByLabelText('Base URL'), 'https://admin:secret@target.example.com')
+    await user.click(save)
+    expect(within(drawer).getByRole('alert')).toHaveTextContent('请输入不含凭证的绝对 HTTP(S) 地址')
+
+    await user.clear(within(drawer).getByLabelText('Base URL'))
+    await user.type(within(drawer).getByLabelText('Base URL'), 'https://target.example.com/')
+    await user.click(save)
+    expect(within(drawer).getByRole('alert')).toHaveTextContent('New API 管理员 Token 不能为空')
+
+    await user.click(within(drawer).getByRole('radio', { name: 'CPA' }))
+    await user.click(save)
+    expect(within(drawer).getByRole('alert')).toHaveTextContent('CPA 管理员凭证不能为空')
+  })
+
   it('limits target presets to New API and CPA and persists filters in the URL', async () => {
     const user = userEvent.setup()
     const { router } = await renderPage(TargetsPage, '/targets')
@@ -277,5 +466,56 @@ describe('Target instances workspace', () => {
     await user.click(within(newRow).getByRole('button', { name: '验证 新 CPA 目标 连接' }))
     expect(await within(newRow).findByText('验证通过')).toBeInTheDocument()
     expect(within(newRow).getByText('12 个渠道')).toBeInTheDocument()
+  })
+
+  it('shows failed target validation and retries edits and confirmed deletion', async () => {
+    let updateAttempts = 0
+    let deleteAttempts = 0
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const path = String(input)
+      if (path.endsWith('/connection-tests')) {
+        return failure('upstream_failure', '目标管理端点不可达')
+      }
+      if (init.method === 'PUT') {
+        updateAttempts += 1
+        if (updateAttempts === 1) return failure('upstream_failure', '保存目标失败')
+        return envelope({ ...config.targets[1], name: '备用 CPA（已更新）' })
+      }
+      expect(init.method).toBe('DELETE')
+      deleteAttempts += 1
+      return deleteAttempts === 1
+        ? failure('upstream_failure', '删除目标失败')
+        : envelope({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+    await renderPage(TargetsPage, '/targets')
+
+    await user.click(screen.getByRole('button', { name: '验证 备用 CPA 连接' }))
+    const failedRow = screen.getByRole('row', { name: /备用 CPA/ })
+    expect(await within(failedRow).findByText('验证失败')).toBeInTheDocument()
+    expect(within(failedRow).getByText('目标管理端点不可达')).toBeInTheDocument()
+    await user.selectOptions(screen.getByLabelText('验证状态'), 'failed')
+    expect(screen.queryByText('生产 New API')).not.toBeInTheDocument()
+
+    await user.click(within(failedRow).getByRole('button', { name: '编辑 备用 CPA' }))
+    let drawer = screen.getByRole('dialog', { name: '编辑目标实例' })
+    const name = within(drawer).getByLabelText('实例名称')
+    await user.clear(name)
+    await user.type(name, '备用 CPA（已更新）')
+    await user.click(within(drawer).getByRole('button', { name: '保存目标' }))
+    expect(await within(drawer).findByRole('alert')).toHaveTextContent('保存目标失败')
+    await user.click(within(drawer).getByRole('button', { name: '保存目标' }))
+    expect(await screen.findByText('备用 CPA（已更新）')).toBeInTheDocument()
+
+    const updatedRow = screen.getByRole('row', { name: /备用 CPA（已更新）/ })
+    await user.click(within(updatedRow).getByRole('button', { name: '编辑 备用 CPA（已更新）' }))
+    drawer = screen.getByRole('dialog', { name: '编辑目标实例' })
+    await user.click(within(drawer).getByRole('button', { name: '删除实例' }))
+    expect(within(drawer).getByRole('button', { name: '确认删除实例' })).toBeInTheDocument()
+    await user.click(within(drawer).getByRole('button', { name: '确认删除实例' }))
+    expect(await within(drawer).findByRole('alert')).toHaveTextContent('删除目标失败')
+    await user.click(within(drawer).getByRole('button', { name: '确认删除实例' }))
+    await waitFor(() => expect(screen.queryByText('备用 CPA（已更新）')).not.toBeInTheDocument())
   })
 })
