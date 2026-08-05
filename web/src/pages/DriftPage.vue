@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { Check, RefreshCw, RotateCcw, ScanSearch, TriangleAlert } from 'lucide-vue-next'
+import { RouterLink } from 'vue-router'
 
 import { api, safeErrorMessage } from '@/api/client'
 import { useConsoleStore } from '@/stores/console'
@@ -145,8 +146,18 @@ async function reconcileAll(): Promise<void> {
       </button>
     </div>
 
+    <div v-else-if="!store.selectedUpstreamId" class="state-panel">
+      <h2>尚未配置上游实例</h2>
+      <RouterLink class="primary-button" to="/upstreams">管理上游连接</RouterLink>
+    </div>
+
+    <div v-else-if="store.targets.length === 0" class="state-panel">
+      <h2>尚未配置目标实例</h2>
+      <RouterLink class="primary-button" to="/targets">管理目标实例</RouterLink>
+    </div>
+
     <div
-      v-else-if="store.selectedUpstreamId && !currentMatrix"
+      v-else-if="!currentMatrix"
       class="state-panel state-error"
       role="alert"
     >
@@ -155,11 +166,6 @@ async function reconcileAll(): Promise<void> {
         <RotateCcw :size="16" aria-hidden="true" />
         重试
       </button>
-    </div>
-
-    <div v-else-if="!store.selectedUpstreamId" class="state-panel">
-      <h2>尚未配置上游实例</h2>
-      <button class="primary-button" type="button" @click="store.navigate('settings')">前往设置</button>
     </div>
 
     <div v-else-if="visibleDriftItems.length === 0" class="state-panel">

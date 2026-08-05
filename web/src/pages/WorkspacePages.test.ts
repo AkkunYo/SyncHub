@@ -190,7 +190,7 @@ describe('workspace page information architecture', () => {
   it('uses an honest empty task table with type and status columns', () => {
     render(TasksPage, {
       props: { loading: false },
-      global: { stubs: { RouterLink: { template: '<a><slot /></a>' } } },
+      global: { stubs: { RouterLink: routerLinkStub } },
     })
 
     const table = screen.getByRole('table', { name: '任务状态列表' })
@@ -199,6 +199,7 @@ describe('workspace page information architecture', () => {
     expect(within(table).getByRole('columnheader', { name: '状态' })).toBeInTheDocument()
     expect(within(table).getByRole('columnheader', { name: '开始时间' })).toBeInTheDocument()
     expect(within(table).getByText('暂无任务记录')).toBeInTheDocument()
+    expect(within(table).getByRole('link', { name: '返回同步工作台' })).toHaveAttribute('href', '/sync')
   })
 
   it('keeps system settings limited to runtime parameters', () => {

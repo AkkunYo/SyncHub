@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
 import { ChevronDown, Pencil, RefreshCw, RotateCcw, Search, Trash2 } from 'lucide-vue-next'
+import { RouterLink } from 'vue-router'
 
 import { api, safeErrorMessage } from '@/api/client'
 import ModalDialog from '@/components/ModalDialog.vue'
@@ -165,7 +166,7 @@ async function confirmDelete(): Promise<void> {
 
     <div v-if="store.targets.length === 0" class="state-panel">
       <h2>尚未配置目标实例</h2>
-      <button class="primary-button" type="button" @click="store.navigate('settings')">前往设置</button>
+      <RouterLink class="primary-button" to="/targets">管理目标实例</RouterLink>
     </div>
 
     <template v-else>

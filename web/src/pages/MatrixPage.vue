@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { RouterLink } from 'vue-router'
 import {
   CheckCircle2,
   Circle,
@@ -434,14 +435,14 @@ function matrixStatusLabel(status: string): string {
             <span><small>步骤 {{ index + 1 }}</small>{{ step.label }}</span>
           </li>
         </ol>
-        <button
-          class="primary-button setup-action"
-          type="button"
-          aria-label="前往设置"
-          @click="store.navigate('settings')"
-        >
-          打开系统设置
-        </button>
+        <div class="setup-actions">
+          <RouterLink v-if="store.targets.length === 0" class="primary-button" to="/targets">
+            配置目标实例
+          </RouterLink>
+          <RouterLink v-if="store.upstreams.length === 0" class="primary-button" to="/upstreams">
+            配置上游连接
+          </RouterLink>
+        </div>
       </div>
 
       <div v-else-if="rows.length === 0" class="state-panel">
@@ -748,8 +749,10 @@ function matrixStatusLabel(status: string): string {
   font-weight: 500;
 }
 
-.setup-action {
+.setup-actions {
+  display: flex;
   justify-self: center;
+  gap: 8px;
   margin-top: 16px;
 }
 
@@ -788,6 +791,15 @@ function matrixStatusLabel(status: string): string {
   .setup-checklist li,
   .setup-checklist li:nth-child(even) {
     border-right: 0;
+  }
+
+  .setup-actions {
+    width: 100%;
+    flex-direction: column;
+  }
+
+  .setup-actions .primary-button {
+    width: 100%;
   }
 
   .matrix-table tbody tr {

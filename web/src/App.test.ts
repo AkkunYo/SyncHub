@@ -32,14 +32,6 @@ const upstream = {
   sync_mappings: [],
 }
 
-const genericUpstream = {
-  id: 'source-generic',
-  name: 'Generic Source',
-  type: 'generic',
-  base_url: 'https://generic-source.invalid',
-  sync_mappings: [],
-}
-
 const config = {
   app: {
     host: '127.0.0.1',
@@ -447,7 +439,11 @@ describe('SyncHub console', () => {
     await fireEvent.click(screen.getByRole('button', { name: '重试加载控制台' }))
 
     expect(await screen.findByText('尚未配置上游实例')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '前往设置' })).toBeEnabled()
+    const configureUpstream = screen.getByRole('link', { name: '配置上游连接' })
+    expect(configureUpstream).toHaveAttribute('href', '/upstreams')
+    await userEvent.setup().click(configureUpstream)
+    expect(await screen.findByRole('heading', { name: '上游连接' })).toBeInTheDocument()
+    expect(window.location.pathname).toBe('/upstreams')
   })
 
   it('filters matrix rows locally and only shows bulk actions for a selection', async () => {
@@ -882,269 +878,35 @@ describe('SyncHub console', () => {
     expect(document.querySelector('.status-synced')).not.toBeInTheDocument()
   })
 
-  it('clears a target credential after a failed submit and never persists it', async () => {
-    const fetchMock = installFetch((url, init) => {
-      if (url.pathname === '/api/v1/config') return envelope(config)
-      if (url.pathname === '/api/v1/matrix') return envelope(matrix())
-      if (url.pathname === '/api/v1/targets' && init.method === 'POST') {
-        return failure('invalid_request', '目标配置无效')
-      }
-      throw new Error(`Unexpected request: ${init.method ?? 'GET'} ${url.pathname}`)
-    })
-    const logSpy = vi.spyOn(console, 'log')
-    const errorSpy = vi.spyOn(console, 'error')
-    const user = userEvent.setup()
-    renderApp()
-
-    await screen.findByText('OpenAI primary')
-    await user.click(screen.getByRole('link', { name: '系统设置' }))
-    await user.click(screen.getByRole('button', { name: '添加目标实例' }))
-
-    const dialog = screen.getByRole('dialog', { name: '添加目标实例' })
-    await user.type(within(dialog).getByLabelText('实例 ID'), 'target-new')
-    await user.type(within(dialog).getByLabelText('名称'), 'New target')
-    await user.type(within(dialog).getByLabelText('Base URL'), 'https://new-target.invalid')
-    const credential = within(dialog).getByLabelText('访问令牌')
-    await user.type(credential, 'temporary-form-value')
-    await user.click(within(dialog).getByRole('button', { name: '保存目标实例' }))
-
-    expect(await within(dialog).findByRole('alert')).toHaveTextContent('目标配置无效')
-    expect(credential).toHaveValue('')
-    expect(window.localStorage).toHaveLength(0)
-    expect(window.sessionStorage).toHaveLength(0)
-    expect(window.location.href).not.toContain('temporary-form-value')
-    expect(logSpy).not.toHaveBeenCalled()
-    expect(errorSpy).not.toHaveBeenCalled()
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/v1/targets',
-      expect.objectContaining({ method: 'POST' }),
-    )
-  })
-
-  it('validates instance URLs before sending credentials', async () => {
+  it('keeps credential management out of settings and routes it to dedicated workspaces', async () => {
     const fetchMock = installConsoleApi()
     const user = userEvent.setup()
     renderApp()
 
     await screen.findByText('OpenAI primary')
-    await user.click(screen.getByRole('link', { name: '系统设置' }))
-    await user.click(screen.getByRole('button', { name: '添加上游实例' }))
+    const navigation = screen.getByRole('navigation', { name: '主导航' })
+    await user.click(within(navigation).getByRole('link', { name: '系统设置' }))
 
-    const dialog = screen.getByRole('dialog', { name: '添加上游实例' })
-    await user.type(within(dialog).getByLabelText('实例 ID'), 'source-new')
-    await user.type(within(dialog).getByLabelText('名称'), 'New source')
-    await user.type(within(dialog).getByLabelText('Base URL'), 'not-a-url')
-    await user.type(within(dialog).getByLabelText('访问令牌'), 'temporary-form-value')
-    await user.click(within(dialog).getByRole('button', { name: '保存上游实例' }))
-
-    expect(within(dialog).getByRole('alert')).toHaveTextContent('请输入绝对 HTTP(S) 地址')
-    expect(fetchMock.mock.calls.some(([input]) => String(input) === '/api/v1/upstreams')).toBe(false)
-  })
-
-  it('creates a New API target with a positive user ID and shows the sanitized identity', async () => {
-    const fetchMock = installFetch((url, init) => {
-      if (url.pathname === '/api/v1/config') return envelope(config)
-      if (url.pathname === '/api/v1/matrix') return envelope(matrix())
-      if (url.pathname === '/api/v1/targets' && init.method === 'POST') {
-        const body = JSON.parse(String(init.body)) as Record<string, unknown>
-        return envelope({
-          id: body.id,
-          name: body.name,
-          type: body.type,
-          base_url: body.base_url,
-          user_id: body.user_id,
-        })
-      }
-      throw new Error(`Unexpected request: ${init.method ?? 'GET'} ${url.pathname}`)
-    })
-    const user = userEvent.setup()
-    renderApp()
-
-    await screen.findByText('OpenAI primary')
-    await user.click(screen.getByRole('link', { name: '系统设置' }))
-    await user.click(screen.getByRole('button', { name: '添加目标实例' }))
-    const dialog = screen.getByRole('dialog', { name: '添加目标实例' })
-    await user.type(within(dialog).getByLabelText('实例 ID'), 'target-with-user')
-    await user.type(within(dialog).getByLabelText('名称'), 'Identity target')
-    await user.type(within(dialog).getByLabelText('Base URL'), 'https://identity-target.invalid')
-    await user.type(within(dialog).getByLabelText('New API 用户 ID'), '73')
-    await user.type(within(dialog).getByLabelText('访问令牌'), 'E2E_TARGET_TOKEN_PLACEHOLDER')
-    await user.click(within(dialog).getByRole('button', { name: '保存目标实例' }))
-
-    expect(await screen.findByText('Identity target')).toBeInTheDocument()
-    expect(screen.getByText('用户 ID 73')).toBeInTheDocument()
-    const createCall = fetchMock.mock.calls.find(([input]) => String(input) === '/api/v1/targets')
-    expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
-      type: 'newapi',
-      user_id: 73,
-      access_token: 'E2E_TARGET_TOKEN_PLACEHOLDER',
-    })
-    expect(JSON.parse(String(createCall?.[1]?.body))).not.toHaveProperty('proxy_api_key')
-    expect(document.body).not.toHaveTextContent('E2E_TARGET_TOKEN_PLACEHOLDER')
-    expect(window.localStorage).toHaveLength(0)
-    expect(window.sessionStorage).toHaveLength(0)
-  })
-
-  it('refills and explicitly clears a configured New API user ID while editing', async () => {
-    const configuredTarget = { ...targetA, user_id: 41 }
-    let updateBody: Record<string, unknown> | undefined
-    installFetch((url, init) => {
-      if (url.pathname === '/api/v1/config') {
-        return envelope({ ...config, targets: [configuredTarget, targetB] })
-      }
-      if (url.pathname === '/api/v1/matrix') return envelope(matrix())
-      if (url.pathname === '/api/v1/targets/target-a' && init.method === 'PUT') {
-        updateBody = JSON.parse(String(init.body)) as Record<string, unknown>
-        return envelope({ ...targetA, name: updateBody.name, base_url: updateBody.base_url })
-      }
-      throw new Error(`Unexpected request: ${init.method ?? 'GET'} ${url.pathname}`)
-    })
-    const user = userEvent.setup()
-    renderApp()
-
-    await screen.findByText('OpenAI primary')
-    await user.click(screen.getByRole('link', { name: '系统设置' }))
-    expect(screen.getByText('用户 ID 41')).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: '编辑目标实例 Target Alpha' }))
-    const dialog = screen.getByRole('dialog', { name: '编辑目标实例' })
-    const userIdInput = within(dialog).getByLabelText('New API 用户 ID')
-    expect(userIdInput).toHaveValue(41)
-    await user.clear(userIdInput)
-    await user.click(within(dialog).getByRole('button', { name: '保存目标实例' }))
-
-    await waitFor(() => expect(updateBody).toMatchObject({ user_id: 0 }))
-    expect(screen.queryByText('用户 ID 41')).not.toBeInTheDocument()
-  })
-
-  it('rejects invalid New API user IDs and omits the field after a platform switch', async () => {
-    const fetchMock = installFetch((url, init) => {
-      if (url.pathname === '/api/v1/config') return envelope(config)
-      if (url.pathname === '/api/v1/matrix') return envelope(matrix())
-      if (url.pathname === '/api/v1/upstreams' && init.method === 'POST') {
-        const body = JSON.parse(String(init.body)) as Record<string, unknown>
-        return envelope({
-          id: body.id,
-          name: body.name,
-          type: body.type,
-          base_url: body.base_url,
-          sync_mappings: [],
-        })
-      }
-      throw new Error(`Unexpected request: ${init.method ?? 'GET'} ${url.pathname}`)
-    })
-    const user = userEvent.setup()
-    renderApp()
-
-    await screen.findByText('OpenAI primary')
-    await user.click(screen.getByRole('link', { name: '系统设置' }))
-    await user.click(screen.getByRole('button', { name: '添加上游实例' }))
-    const dialog = screen.getByRole('dialog', { name: '添加上游实例' })
-    await user.type(within(dialog).getByLabelText('实例 ID'), 'source-switched')
-    await user.type(within(dialog).getByLabelText('名称'), 'Switched source')
-    await user.type(within(dialog).getByLabelText('Base URL'), 'https://switched-source.invalid')
-    await user.type(within(dialog).getByLabelText('访问令牌'), 'E2E_MANAGEMENT_KEY_PLACEHOLDER')
-    const userIdInput = within(dialog).getByLabelText('New API 用户 ID')
-    await user.type(userIdInput, '1.5')
-    await fireEvent.submit(dialog.querySelector('form')!)
-    expect(within(dialog).getByRole('alert')).toHaveTextContent('New API 用户 ID 必须为正整数')
-    expect(fetchMock.mock.calls.some(([input]) => String(input) === '/api/v1/upstreams')).toBe(false)
-
-    await user.clear(userIdInput)
-    await user.type(userIdInput, '0')
-    await fireEvent.submit(dialog.querySelector('form')!)
-    expect(within(dialog).getByRole('alert')).toHaveTextContent('New API 用户 ID 必须为正整数')
-
-    await user.clear(userIdInput)
-    await user.type(userIdInput, '-2')
-    await fireEvent.submit(dialog.querySelector('form')!)
-    expect(within(dialog).getByRole('alert')).toHaveTextContent('New API 用户 ID 必须为正整数')
-
-    await user.clear(userIdInput)
-    await user.type(userIdInput, '17')
-    await user.selectOptions(within(dialog).getByLabelText('平台类型'), 'generic')
-    expect(within(dialog).queryByLabelText('New API 用户 ID')).not.toBeInTheDocument()
-    expect(within(dialog).getByLabelText('API Key')).toHaveValue('E2E_MANAGEMENT_KEY_PLACEHOLDER')
-    await user.click(within(dialog).getByRole('button', { name: '保存上游实例' }))
-
-    expect(await screen.findByText('Switched source')).toBeInTheDocument()
-    const createCall = fetchMock.mock.calls.find(([input]) => String(input) === '/api/v1/upstreams')
-    const createBody = JSON.parse(String(createCall?.[1]?.body))
-    expect(createBody).toMatchObject({ type: 'generic', api_key: 'E2E_MANAGEMENT_KEY_PLACEHOLDER' })
-    expect(createBody).not.toHaveProperty('user_id')
-    expect(createBody).not.toHaveProperty('access_token')
-    expect(createBody).not.toHaveProperty('management_key')
-  })
-
-  it('creates and edits a generic upstream with only its URL and shared API key', async () => {
-    let updateBody: Record<string, unknown> | undefined
-    const fetchMock = installFetch((url, init) => {
-      if (url.pathname === '/api/v1/config') return envelope(config)
-      if (url.pathname === '/api/v1/matrix') return envelope(matrix())
-      if (url.pathname === '/api/v1/upstreams' && init.method === 'POST') {
-        const body = JSON.parse(String(init.body)) as Record<string, unknown>
-        return envelope({
-          id: body.id,
-          name: body.name,
-          type: body.type,
-          base_url: body.base_url,
-          sync_mappings: [],
-        })
-      }
-      if (url.pathname === '/api/v1/upstreams/source-generic' && init.method === 'PUT') {
-        updateBody = JSON.parse(String(init.body)) as Record<string, unknown>
-        return envelope({ ...genericUpstream, ...updateBody })
-      }
-      throw new Error(`Unexpected request: ${init.method ?? 'GET'} ${url.pathname}`)
-    })
-    const user = userEvent.setup()
-    renderApp()
-
-    await screen.findByText('OpenAI primary')
-    await user.click(screen.getByRole('link', { name: '系统设置' }))
-    await user.click(screen.getByRole('button', { name: '添加上游实例' }))
-    const dialog = screen.getByRole('dialog', { name: '添加上游实例' })
-    expect(within(dialog).getByRole('option', { name: 'New API' })).toBeInTheDocument()
-    expect(within(dialog).getByRole('option', { name: '通用 API' })).toBeInTheDocument()
-    expect(within(dialog).queryByRole('option', { name: 'CLIProxyAPI' })).not.toBeInTheDocument()
-    expect(within(dialog).queryByRole('option', { name: 'Sub2Api' })).not.toBeInTheDocument()
-    await user.selectOptions(within(dialog).getByLabelText('平台类型'), 'generic')
-    await user.type(within(dialog).getByLabelText('实例 ID'), 'source-generic')
-    await user.type(within(dialog).getByLabelText('名称'), 'Generic Source')
-    await user.type(within(dialog).getByLabelText('Base URL'), 'https://generic-source.invalid/')
-    const apiKey = within(dialog).getByLabelText('API Key')
-    expect(apiKey).toHaveAttribute('type', 'password')
-    expect(apiKey).toHaveAttribute('autocomplete', 'off')
-    expect(within(dialog).queryByLabelText('New API 用户 ID')).not.toBeInTheDocument()
-    expect(within(dialog).queryByLabelText('管理密钥')).not.toBeInTheDocument()
-    await user.type(apiKey, 'GENERIC_CREATE_KEY_PLACEHOLDER')
-    await user.click(within(dialog).getByRole('button', { name: '保存上游实例' }))
-
-    expect(await screen.findByText('Generic Source')).toBeInTheDocument()
-    const createCall = fetchMock.mock.calls.find(([input]) => String(input) === '/api/v1/upstreams')
-    expect(JSON.parse(String(createCall?.[1]?.body))).toEqual({
-      id: 'source-generic',
-      name: 'Generic Source',
-      type: 'generic',
-      base_url: 'https://generic-source.invalid',
-      api_key: 'GENERIC_CREATE_KEY_PLACEHOLDER',
-    })
-    expect(document.body).not.toHaveTextContent('GENERIC_CREATE_KEY_PLACEHOLDER')
+    expect(screen.getByRole('region', { name: '运行参数' })).toBeInTheDocument()
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '添加目标实例' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '添加上游实例' })).not.toBeInTheDocument()
+    expect(document.querySelector('input[type="password"]')).toBeNull()
     expect(window.localStorage).toHaveLength(0)
     expect(window.sessionStorage).toHaveLength(0)
 
-    await user.click(screen.getByRole('button', { name: '编辑上游实例 Generic Source' }))
-    const editDialog = screen.getByRole('dialog', { name: '编辑上游实例' })
-    expect(within(editDialog).getByLabelText('API Key')).toHaveValue('')
-    await user.type(within(editDialog).getByLabelText('API Key'), 'GENERIC_REPLACE_KEY_PLACEHOLDER')
-    await user.click(within(editDialog).getByRole('button', { name: '保存上游实例' }))
+    await user.click(within(navigation).getByRole('link', { name: '上游连接' }))
+    expect(await screen.findByRole('heading', { name: '上游连接' })).toBeInTheDocument()
+    expect(window.location.pathname).toBe('/upstreams')
 
-    await waitFor(() => expect(updateBody).toBeDefined())
-    expect(updateBody).toEqual({
-      name: 'Generic Source',
-      base_url: 'https://generic-source.invalid',
-      api_key: 'GENERIC_REPLACE_KEY_PLACEHOLDER',
-    })
-    expect(document.body).not.toHaveTextContent('GENERIC_REPLACE_KEY_PLACEHOLDER')
+    await user.click(within(navigation).getByRole('link', { name: '目标实例' }))
+    expect(await screen.findByRole('heading', { name: '目标实例' })).toBeInTheDocument()
+    expect(window.location.pathname).toBe('/targets')
+
+    const writeCalls = fetchMock.mock.calls.filter(([, init]) =>
+      ['POST', 'PUT', 'PATCH', 'DELETE'].includes(String(init?.method ?? 'GET').toUpperCase()),
+    )
+    expect(writeCalls).toHaveLength(0)
   })
 
   it('opens and closes the narrow-screen navigation after selecting a page', async () => {
@@ -1272,46 +1034,24 @@ describe('SyncHub console', () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/channels/9'))).toBe(true)
   })
 
-  it('switches settings tabs without writing to the API', async () => {
-    const fetchMock = installFetch((url) => {
-      if (url.pathname === '/api/v1/health') {
-        return envelope({ status: 'ok', version: 'v1.3.0', build_date: '2026-07-29T16:00:00+08:00' })
-      }
-      if (url.pathname === '/api/v1/config') return envelope(config)
-      if (url.pathname === '/api/v1/matrix') return envelope(matrix())
-      throw new Error(`Unexpected request: ${url.pathname}`)
-    })
+  it('shows runtime settings directly without writing to the API', async () => {
+    const fetchMock = installConsoleApi()
     const user = userEvent.setup()
     renderApp()
 
     await screen.findByText('OpenAI primary')
-    await user.click(within(screen.getByRole('navigation', { name: '主导航' })).getByRole('link', { name: '系统设置' }))
+    await user.click(
+      within(screen.getByRole('navigation', { name: '主导航' }))
+        .getByRole('link', { name: '系统设置' }),
+    )
 
-    const tablist = screen.getByRole('tablist', { name: '设置分类' })
-    const instanceTab = within(tablist).getByRole('tab', { name: '实例管理' })
-    const runtimeTab = within(tablist).getByRole('tab', { name: '运行参数' })
-    expect(instanceTab).toHaveAttribute('aria-selected', 'true')
-    expect(instanceTab).toHaveAttribute('tabindex', '0')
-    expect(runtimeTab).toHaveAttribute('aria-selected', 'false')
-    expect(runtimeTab).toHaveAttribute('tabindex', '-1')
-    const instancePanel = screen.getByRole('tabpanel', { name: '实例管理' })
-    expect(within(instancePanel).getByRole('heading', { name: '目标实例' })).toBeInTheDocument()
-    expect(within(instancePanel).getByRole('heading', { name: '上游实例' })).toBeInTheDocument()
-    expect(document.getElementById('settings-runtime-panel')).toHaveAttribute('hidden')
-
-    instanceTab.focus()
-    await fireEvent.keyDown(instanceTab, { key: 'ArrowRight' })
-    await waitFor(() => expect(runtimeTab).toHaveFocus())
-    expect(instanceTab).toHaveAttribute('aria-selected', 'false')
-    expect(runtimeTab).toHaveAttribute('aria-selected', 'true')
-    const runtimePanel = screen.getByRole('tabpanel', { name: '运行参数' })
-    expect(within(runtimePanel).getByLabelText('同步并发')).toHaveValue(4)
-    expect(screen.queryByRole('button', { name: '添加目标实例' })).not.toBeInTheDocument()
-
-    await fireEvent.keyDown(runtimeTab, { key: 'Home' })
-    await waitFor(() => expect(instanceTab).toHaveFocus())
-    expect(instanceTab).toHaveAttribute('aria-selected', 'true')
-    await user.click(runtimeTab)
+    const runtimeSettings = screen.getByRole('region', { name: '运行参数' })
+    expect(within(runtimeSettings).getByLabelText('监听地址')).toHaveValue('127.0.0.1')
+    expect(within(runtimeSettings).getByLabelText('端口')).toHaveValue(8888)
+    expect(within(runtimeSettings).getByLabelText('校验间隔')).toHaveValue('5m0s')
+    expect(within(runtimeSettings).getByLabelText('请求超时')).toHaveValue('15s')
+    expect(within(runtimeSettings).getByLabelText('同步并发')).toHaveValue(4)
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
 
     const writeCalls = fetchMock.mock.calls.filter(([, init]) =>
       ['POST', 'PUT', 'PATCH', 'DELETE'].includes(String(init?.method ?? 'GET').toUpperCase()),
@@ -1319,25 +1059,13 @@ describe('SyncHub console', () => {
     expect(writeCalls).toHaveLength(0)
   })
 
-  it('adds, edits, and deletes instances and saves runtime settings', async () => {
+  it('saves runtime settings without exposing connection controls', async () => {
     const fetchMock = installFetch((url, init) => {
+      if (url.pathname === '/api/v1/health') {
+        return envelope({ status: 'ok', version: 'v1.3.0', build_date: '2026-07-29T16:00:00+08:00' })
+      }
       if (url.pathname === '/api/v1/config') return envelope(config)
       if (url.pathname === '/api/v1/matrix') return envelope(matrix())
-      if (url.pathname === '/api/v1/upstreams' && init.method === 'POST') {
-        const body = JSON.parse(String(init.body)) as Record<string, unknown>
-        return envelope({
-          id: body.id,
-          name: body.name,
-          type: body.type,
-          base_url: body.base_url,
-          sync_mappings: [],
-        })
-      }
-      if (url.pathname === '/api/v1/targets/target-a' && init.method === 'PUT') {
-        const body = JSON.parse(String(init.body)) as Record<string, unknown>
-        return envelope({ ...targetA, ...body })
-      }
-      if (url.pathname === '/api/v1/upstreams/source-a' && init.method === 'DELETE') return envelope({})
       if (url.pathname === '/api/v1/config/app' && init.method === 'PUT') {
         return envelope(JSON.parse(String(init.body)))
       }
@@ -1348,43 +1076,29 @@ describe('SyncHub console', () => {
 
     await screen.findByText('OpenAI primary')
     await user.click(screen.getByRole('link', { name: '系统设置' }))
-    await user.click(screen.getByRole('button', { name: '添加上游实例' }))
-    const addDialog = screen.getByRole('dialog', { name: '添加上游实例' })
-    await user.type(within(addDialog).getByLabelText('实例 ID'), 'source-generic-crud')
-    await user.type(within(addDialog).getByLabelText('名称'), 'Source Gamma')
-    await user.selectOptions(within(addDialog).getByLabelText('平台类型'), 'generic')
-    await user.type(within(addDialog).getByLabelText('Base URL'), 'https://source-generic.invalid/')
-    await user.type(within(addDialog).getByLabelText('API Key'), 'temporary-form-value')
-    await user.click(within(addDialog).getByRole('button', { name: '保存上游实例' }))
-    expect(await screen.findByText('Source Gamma')).toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: '编辑目标实例 Target Alpha' }))
-    const editDialog = screen.getByRole('dialog', { name: '编辑目标实例' })
-    await user.clear(within(editDialog).getByLabelText('名称'))
-    await user.type(within(editDialog).getByLabelText('名称'), 'Target Alpha updated')
-    await user.click(within(editDialog).getByRole('button', { name: '保存目标实例' }))
-    expect(await screen.findByText('Target Alpha updated')).toBeInTheDocument()
-
-    await user.click(screen.getByRole('button', { name: '删除上游实例 Source Alpha' }))
-    const deleteDialog = screen.getByRole('dialog', { name: '删除实例' })
-    await user.click(within(deleteDialog).getByRole('button', { name: '确认删除' }))
-    await waitFor(() => expect(screen.queryByText('Source Alpha')).not.toBeInTheDocument())
-
-    await user.click(screen.getByRole('tab', { name: '运行参数' }))
     const concurrency = screen.getByLabelText('同步并发')
     await user.clear(concurrency)
     await user.type(concurrency, '6')
     await user.click(screen.getByRole('button', { name: '保存运行设置' }))
     expect(await screen.findByText('运行设置已保存')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '添加目标实例' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '添加上游实例' })).not.toBeInTheDocument()
 
-    const createCall = fetchMock.mock.calls.find(([input]) => String(input) === '/api/v1/upstreams')
-    expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
-      id: 'source-generic-crud',
-      type: 'generic',
-      base_url: 'https://source-generic.invalid',
-      api_key: 'temporary-form-value',
+    const writeCalls = fetchMock.mock.calls.filter(([, init]) =>
+      ['POST', 'PUT', 'PATCH', 'DELETE'].includes(String(init?.method ?? 'GET').toUpperCase()),
+    )
+    expect(writeCalls).toHaveLength(1)
+    expect(writeCalls[0]?.[0]).toBe('/api/v1/config/app')
+    expect(JSON.parse(String(writeCalls[0]?.[1]?.body))).toMatchObject({
+      host: '127.0.0.1',
+      port: 8888,
+      reconcile_interval: '5m0s',
+      request_timeout: '15s',
+      sync_concurrency: 6,
     })
     expect(window.localStorage).toHaveLength(0)
+    expect(window.sessionStorage).toHaveLength(0)
   })
 
   it('validates sync settings, selects all assets, and clears modal state on Escape', async () => {
