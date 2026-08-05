@@ -234,6 +234,7 @@ describe('Connection resource details', () => {
       upstream_id: 'source-generic',
       key_id: 'primary',
       snapshot_status: 'ready',
+      snapshot_scope: 'runtime',
       discovered_at: '2026-08-05T05:58:00Z',
       models: [
         { id: 'gpt-4o-mini', discovery_status: 'discovered', probe: null },
@@ -265,7 +266,19 @@ describe('Connection resource details', () => {
       }
       if (path === '/api/v1/upstreams/source-generic/model-discoveries' && method === 'POST') {
         expect(JSON.parse(String(init.body))).toEqual({ key_ids: ['primary'] })
-        return envelope({ task_id: 'task-discovery-1', key_ids: ['primary'] }, 202)
+        return envelope({
+          task_id: 'task-discovery-1',
+          key_ids: ['primary'],
+          completed: true,
+          status: 'partially_failed',
+          items: [{
+            key_id: 'primary',
+            status: 'failed',
+            model_count: 2,
+            error_code: 'rate_limited',
+            retryable: true,
+          }],
+        }, 202)
       }
       expect(path).toBe('/api/v1/upstreams/source-generic/keys/primary/model-probes')
       expect(method).toBe('POST')
@@ -283,6 +296,7 @@ describe('Connection resource details', () => {
     const modal = await screen.findByRole('dialog', { name: '主 Key 模型' })
     expect(within(modal).getByText('本次请求可能产生真实费用')).toBeInTheDocument()
     expect(within(modal).getByText('输入约 20-50 Token / 输出最多 64 Token')).toBeInTheDocument()
+    expect(within(modal).getByText('本次运行')).toBeInTheDocument()
     expect(within(modal).getByText('gpt-4o-mini')).toBeInTheDocument()
     expect(within(modal).getByText('gpt-4.1')).toBeInTheDocument()
 
@@ -303,6 +317,7 @@ describe('Connection resource details', () => {
 
     await user.click(within(modal).getByRole('button', { name: '刷新模型' }))
     expect(await within(modal).findByText('模型发现任务已提交')).toBeInTheDocument()
+    expect(within(modal).getByText('部分模型刷新未完成：请求受限')).toBeInTheDocument()
     expect(document.body.textContent).not.toContain('sk-primary')
     expect(document.body.textContent).not.toContain('请把')
   })

@@ -3,7 +3,11 @@ import type {
   Channel,
   ChannelInput,
   ConnectionTestResult,
+  KeyModelsResponse,
   MatrixData,
+  ModelDiscoveryTask,
+  ModelProbeProtocol,
+  ModelProbeResult,
   RuntimeInfo,
   SanitizedConfig,
   SyncResponse,
@@ -152,6 +156,25 @@ export const api = {
     request<Record<string, never>>(`/upstreams/${segment(upstreamId)}/keys/${segment(keyId)}`, {
       method: 'DELETE',
     }),
+  discoverModels: (upstreamId: string, keyIds: string[]) =>
+    request<ModelDiscoveryTask>(`/upstreams/${segment(upstreamId)}/model-discoveries`, {
+      method: 'POST',
+      body: { key_ids: keyIds },
+    }),
+  getKeyModels: (upstreamId: string, keyId: string, signal?: AbortSignal) =>
+    request<KeyModelsResponse>(
+      `/upstreams/${segment(upstreamId)}/keys/${segment(keyId)}/models`,
+      { signal },
+    ),
+  probeModel: (
+    upstreamId: string,
+    keyId: string,
+    input: { model: string; protocol: ModelProbeProtocol },
+  ) =>
+    request<ModelProbeResult>(
+      `/upstreams/${segment(upstreamId)}/keys/${segment(keyId)}/model-probes`,
+      { method: 'POST', body: input },
+    ),
   getChannels: (targetId: string, signal?: AbortSignal) =>
     request<{ channels: Channel[] }>(`/targets/${segment(targetId)}/channels`, { signal }),
   updateChannel: (targetId: string, channelId: string, input: ChannelInput) =>

@@ -67,6 +67,65 @@ export interface ConnectionTestResult {
   capabilities: Record<string, boolean | number | string>
 }
 
+export type ModelProbeProtocol = 'auto' | 'chat_completions' | 'responses' | 'completions'
+
+export type ModelProbeStatus =
+  | 'healthy'
+  | 'reachable_inconclusive'
+  | 'authentication_failed'
+  | 'model_unavailable'
+  | 'rate_limited'
+  | 'timeout'
+  | 'network_error'
+  | 'invalid_response'
+  | 'unsupported'
+
+export interface ModelProbeResult {
+  key_id: string
+  model: string
+  protocol: Exclude<ModelProbeProtocol, 'auto'>
+  status: ModelProbeStatus
+  latency_ms: number
+  checked_at: string
+  error_code: string
+  retryable: boolean
+  retry_after_seconds?: number
+  template_version: string
+}
+
+export interface KeyModelObservation {
+  id: string
+  discovery_status: 'discovered' | 'unverified'
+  probe?: ModelProbeResult | null
+}
+
+export interface KeyModelsResponse {
+  upstream_id: string
+  key_id: string
+  models: KeyModelObservation[]
+  snapshot_status: 'ready' | 'empty' | 'stale' | 'unverified'
+  snapshot_scope: 'persisted' | 'runtime'
+  discovered_at?: string
+}
+
+export interface ModelDiscoveryItem {
+  key_id: string
+  status: 'succeeded' | 'empty' | 'authentication_failed' | 'rate_limited' | 'unsupported' | 'failed'
+  model_count: number
+  discovered_at?: string
+  error_code?: string
+  retryable: boolean
+  retry_after_seconds?: number
+}
+
+export interface ModelDiscoveryTask {
+  task_id: string
+  key_ids: string[]
+  completed: boolean
+  status: 'succeeded' | 'partially_failed' | 'failed'
+  items: ModelDiscoveryItem[]
+}
+
 export interface SanitizedConfig {
   app: AppSettings
   targets: TargetConfig[]

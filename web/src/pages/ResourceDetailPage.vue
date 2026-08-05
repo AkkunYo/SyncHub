@@ -1,14 +1,18 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import {
   ArrowLeft,
   ArrowRight,
   CheckCircle2,
   CircleAlert,
+  Eye,
+  FlaskConical,
   KeyRound,
   Pencil,
   Plus,
   RefreshCw,
+  RotateCcw,
+  Search,
   Settings2,
   Trash2,
 } from 'lucide-vue-next'
@@ -19,6 +23,11 @@ import SidePanel from '@/components/SidePanel.vue'
 import { useConsoleStore } from '@/stores/console'
 import type {
   ConnectionTestResult,
+  KeyModelObservation,
+  KeyModelsResponse,
+  ModelDiscoveryItem,
+  ModelProbeProtocol,
+  ModelProbeStatus,
   TargetConfig,
   UpstreamConfig,
   UpstreamKey,
@@ -28,6 +37,8 @@ import type {
 type ResourceKind = 'upstream' | 'target' | 'drift' | 'task'
 type DetailTab = 'keys' | 'groups' | 'overview' | 'settings'
 type ConnectionState = 'unverified' | 'testing' | 'verified' | 'failed'
+type LoadState = 'idle' | 'loading' | 'ready' | 'error'
+type ProbeFilter = 'all' | 'untested' | ModelProbeStatus
 
 const props = defineProps<{
   kind: ResourceKind
@@ -48,6 +59,21 @@ const keySaving = ref(false)
 const keyDeleting = ref(false)
 const keyDeleteArmed = ref(false)
 const keyError = ref('')
+const keys = ref<UpstreamKey[]>([])
+const keysState = ref<LoadState>('idle')
+const keysError = ref('')
+const modelPanelOpen = ref(false)
+const selectedKey = ref<UpstreamKey | null>(null)
+const modelsState = ref<LoadState>('idle')
+const modelSnapshot = ref<KeyModelsResponse | null>(null)
+const modelsError = ref('')
+const modelQuery = ref('')
+const probeFilter = ref<ProbeFilter>('all')
+const protocolByModel = reactive<Record<string, ModelProbeProtocol>>({})
+const probingModels = ref(new Set<string>())
+const discoveryRunning = ref(false)
+const discoveryNotice = ref('')
+const discoveryWarning = ref('')
 const keyForm = reactive({
   id: '',
   name: '',
@@ -85,6 +111,174 @@ const activeTab = computed<DetailTab>(() => {
   return defaultTab.value
 })
 const isEditingKey = computed(() => Boolean(editingKeyId.value))
+const displayedKeys = computed(() => keys.value)
+const filteredModels = computed(() => {
+  const query = modelQuery.value.trim().toLocaleLowerCase()
+  return (modelSnapshot.value?.models ?? []).filter((model) => {
+    const matchesQuery = !query || model.id.toLocaleLowerCase().includes(query)
+    const status = model.probe?.status ?? 'untested'
+    return matchesQuery && (probeFilter.value === 'all' || probeFilter.value === status)
+  })
+})
+
+function syncKeys(nextKeys: UpstreamKey[]): void {
+  keys.value = nextKeys.map((key) => ({ ...key, models: [...key.models] }))
+  if (upstreamResource.value) upstreamResource.value.keys = keys.value
+}
+
+async function loadKeys(): Promise<void> {
+  const upstream = upstreamResource.value
+  if (!upstream) return
+  keysState.value = 'loading'
+  keysError.value = ''
+  try {
+    const response = await api.getUpstreamKeys(upstream.id)
+    syncKeys(response.keys)
+    keysState.value = 'ready'
+  } catch (error) {
+    keysError.value = safeErrorMessage(error)
+    keysState.value = 'error'
+  }
+}
+
+function modelProbeLabel(status?: ModelProbeStatus): string {
+  if (!status) return '未测试'
+  const labels: Record<ModelProbeStatus, string> = {
+    healthy: '健康',
+    reachable_inconclusive: '可达未确认',
+    authentication_failed: '鉴权失败',
+    model_unavailable: '模型不可用',
+    rate_limited: '请求受限',
+    timeout: '超时',
+    network_error: '网络错误',
+    invalid_response: '响应无效',
+    unsupported: '协议不支持',
+  }
+  return labels[status]
+}
+
+function modelDiscoveryWarning(item?: ModelDiscoveryItem): string {
+  if (!item || item.status === 'succeeded' || item.status === 'empty') return ''
+  const labels: Record<string, string> = {
+    authentication_failed: '鉴权失败',
+    rate_limited: '请求受限',
+    unsupported: '模型发现不受支持',
+    timeout: '请求超时',
+    network_error: '网络错误',
+  }
+  return `部分模型刷新未完成：${labels[item.error_code ?? item.status] ?? '上游请求失败'}`
+}
+
+function resetModelPanel(): void {
+  modelsState.value = 'idle'
+  modelSnapshot.value = null
+  modelsError.value = ''
+  modelQuery.value = ''
+  probeFilter.value = 'all'
+  discoveryNotice.value = ''
+  discoveryWarning.value = ''
+  probingModels.value = new Set()
+  for (const model of Object.keys(protocolByModel)) delete protocolByModel[model]
+}
+
+async function loadModels(): Promise<void> {
+  const upstream = upstreamResource.value
+  const key = selectedKey.value
+  if (!upstream || !key) return
+  modelsState.value = 'loading'
+  modelsError.value = ''
+  try {
+    const response = await api.getKeyModels(upstream.id, key.id)
+    if (selectedKey.value?.id !== key.id) return
+    modelSnapshot.value = response
+    for (const model of response.models) {
+      protocolByModel[model.id] ??= model.probe?.protocol ?? 'auto'
+    }
+    const currentKey = keys.value.find((candidate) => candidate.id === key.id)
+    if (currentKey) currentKey.models = response.models.map((model) => model.id)
+    modelsState.value = 'ready'
+  } catch (error) {
+    if (selectedKey.value?.id !== key.id) return
+    modelsError.value = safeErrorMessage(error)
+    modelsState.value = 'error'
+  }
+}
+
+function openModels(key: UpstreamKey): void {
+  resetModelPanel()
+  selectedKey.value = key
+  modelPanelOpen.value = true
+  void loadModels()
+}
+
+function closeModels(): void {
+  if (discoveryRunning.value || probingModels.value.size > 0) return
+  modelPanelOpen.value = false
+  selectedKey.value = null
+  resetModelPanel()
+}
+
+async function refreshModels(requestedKey?: UpstreamKey): Promise<void> {
+  const upstream = upstreamResource.value
+  const key = requestedKey ?? selectedKey.value
+  if (!upstream || !key || discoveryRunning.value) return
+  if (!modelPanelOpen.value) openModels(key)
+  discoveryRunning.value = true
+  discoveryNotice.value = ''
+  discoveryWarning.value = ''
+  try {
+    const task = await api.discoverModels(upstream.id, [key.id])
+    discoveryNotice.value = '模型发现任务已提交'
+    discoveryWarning.value = modelDiscoveryWarning(task.items.find((item) => item.key_id === key.id))
+    await loadModels()
+  } catch (error) {
+    discoveryWarning.value = safeErrorMessage(error)
+  } finally {
+    discoveryRunning.value = false
+  }
+}
+
+async function probeModel(model: KeyModelObservation): Promise<void> {
+  const upstream = upstreamResource.value
+  const key = selectedKey.value
+  if (!upstream || !key || probingModels.value.has(model.id)) return
+  const inFlight = new Set(probingModels.value)
+  inFlight.add(model.id)
+  probingModels.value = inFlight
+  modelsError.value = ''
+  try {
+    const result = await api.probeModel(
+      upstream.id,
+      key.id,
+      { model: model.id, protocol: protocolByModel[model.id] ?? 'auto' },
+    )
+    if (selectedKey.value?.id === key.id && modelSnapshot.value) {
+      modelSnapshot.value = {
+        ...modelSnapshot.value,
+        models: modelSnapshot.value.models.map((candidate) => (
+          candidate.id === model.id ? { ...candidate, probe: result } : candidate
+        )),
+      }
+    }
+  } catch (error) {
+    modelsError.value = safeErrorMessage(error)
+  } finally {
+    const remaining = new Set(probingModels.value)
+    remaining.delete(model.id)
+    probingModels.value = remaining
+  }
+}
+
+function probeButtonLabel(model: KeyModelObservation): string {
+  if (probingModels.value.has(model.id)) return `正在测活 ${model.id}`
+  return model.probe ? `重试 ${model.id}` : `测活 ${model.id}`
+}
+
+onMounted(() => {
+  if (!upstreamResource.value) return
+  syncKeys(upstreamResource.value.keys ?? [])
+  void loadKeys()
+})
 
 function setTab(tab: DetailTab): void {
   const query = { ...route.query }
@@ -147,12 +341,11 @@ function validateKeyForm(): string {
 }
 
 function replaceKey(key: UpstreamKey): void {
-  const upstream = upstreamResource.value
-  if (!upstream) return
-  const keys = upstream.keys ?? []
-  const index = keys.findIndex((candidate) => candidate.id === key.id)
-  if (index === -1) upstream.keys = [...keys, key]
-  else upstream.keys = keys.map((candidate, candidateIndex) => candidateIndex === index ? key : candidate)
+  const current = keys.value
+  const index = current.findIndex((candidate) => candidate.id === key.id)
+  syncKeys(index === -1
+    ? [...current, key]
+    : current.map((candidate, candidateIndex) => candidateIndex === index ? key : candidate))
 }
 
 async function saveKey(): Promise<void> {
@@ -209,7 +402,7 @@ async function deleteKey(): Promise<void> {
   keyError.value = ''
   try {
     await api.deleteUpstreamKey(upstream.id, editingKeyId.value)
-    upstream.keys = (upstream.keys ?? []).filter((key) => key.id !== editingKeyId.value)
+    syncKeys(keys.value.filter((key) => key.id !== editingKeyId.value))
     keyPanelOpen.value = false
     resetKeyForm()
   } catch (error) {
@@ -370,9 +563,19 @@ function capabilityLabel(value: string): string {
         <header class="panel-toolbar">
           <div>
             <h2>Key 与模型</h2>
-            <span>{{ upstreamResource?.keys?.length ?? 0 }} 个 Key</span>
+            <span>{{ displayedKeys.length }} 个 Key</span>
           </div>
           <div class="panel-actions">
+            <button
+              class="icon-button icon-button-small"
+              type="button"
+              aria-label="重新加载 Key 列表"
+              title="重新加载 Key 列表"
+              :disabled="keysState === 'loading'"
+              @click="loadKeys"
+            >
+              <RefreshCw :class="{ spin: keysState === 'loading' }" :size="15" aria-hidden="true" />
+            </button>
             <button
               v-if="upstreamResource?.type === 'generic'"
               class="secondary-button"
@@ -390,11 +593,28 @@ function capabilityLabel(value: string): string {
           </div>
         </header>
 
-        <div v-if="!upstreamResource?.keys?.length" class="detail-empty">
+        <div
+          v-if="keysState === 'loading'"
+          class="key-load-state"
+          role="status"
+          aria-label="正在加载 Key 列表"
+        >
+          <span class="spinner spinner-small" aria-hidden="true"></span>
+          正在加载 Key 列表
+        </div>
+        <div v-else-if="keysState === 'error'" class="key-load-state is-error" role="alert">
+          <span>{{ keysError }}</span>
+          <button class="secondary-button" type="button" aria-label="重试 Key 列表" @click="loadKeys">
+            <RotateCcw :size="15" aria-hidden="true" />
+            重试
+          </button>
+        </div>
+
+        <div v-if="keysState !== 'loading' && !displayedKeys.length" class="detail-empty">
           <KeyRound :size="22" aria-hidden="true" />
           <p>{{ upstreamResource?.type === 'newapi' ? '暂无已发现的用户 Key' : '尚未配置通用 Key' }}</p>
         </div>
-        <div v-else class="detail-table-wrap">
+        <div v-else-if="displayedKeys.length" class="detail-table-wrap">
           <table class="key-table">
             <thead>
               <tr>
@@ -407,7 +627,7 @@ function capabilityLabel(value: string): string {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="key in upstreamResource.keys" :key="key.id">
+              <tr v-for="key in displayedKeys" :key="key.id">
                 <td data-label="Key">
                   <div class="key-name">
                     <strong>{{ key.name }}</strong>
@@ -423,16 +643,37 @@ function capabilityLabel(value: string): string {
                 <td data-label="发现状态"><span class="compact-status is-unverified">未验证</span></td>
                 <td data-label="凭证">{{ key.credential_present ? '凭证已配置' : '凭证缺失' }}</td>
                 <td data-label="操作">
-                  <button
-                    v-if="upstreamResource?.type === 'generic'"
-                    class="icon-button icon-button-small"
-                    type="button"
-                    :aria-label="`编辑 Key ${key.name}`"
-                    title="编辑 Key"
-                    @click="openEditKey(key)"
-                  >
-                    <Pencil :size="15" aria-hidden="true" />
-                  </button>
+                  <div class="key-actions">
+                    <button
+                      class="icon-button icon-button-small"
+                      type="button"
+                      :aria-label="`刷新 ${key.name} 模型`"
+                      title="刷新模型"
+                      :disabled="discoveryRunning"
+                      @click="refreshModels(key)"
+                    >
+                      <RefreshCw :size="15" aria-hidden="true" />
+                    </button>
+                    <button
+                      class="icon-button icon-button-small"
+                      type="button"
+                      :aria-label="`查看 ${key.name} 模型`"
+                      title="查看模型"
+                      @click="openModels(key)"
+                    >
+                      <Eye :size="15" aria-hidden="true" />
+                    </button>
+                    <button
+                      v-if="upstreamResource?.type === 'generic'"
+                      class="icon-button icon-button-small"
+                      type="button"
+                      :aria-label="`编辑 Key ${key.name}`"
+                      title="编辑 Key"
+                      @click="openEditKey(key)"
+                    >
+                      <Pencil :size="15" aria-hidden="true" />
+                    </button>
+                  </div>
                 </td>
               </tr>
             </tbody>
@@ -620,6 +861,154 @@ function capabilityLabel(value: string): string {
           </button>
         </footer>
       </form>
+    </SidePanel>
+
+    <SidePanel
+      v-if="modelPanelOpen && selectedKey"
+      :title="`${selectedKey.name} 模型`"
+      :close-label="`关闭 ${selectedKey.name} 模型`"
+      width="wide"
+      @close="closeModels"
+    >
+      <div class="models-panel">
+        <header class="models-command-bar">
+          <div class="snapshot-meta">
+            <strong>{{ selectedKey.name }}</strong>
+            <code>{{ selectedKey.id }}</code>
+            <span v-if="modelSnapshot?.snapshot_scope === 'runtime'" class="scope-badge">本次运行</span>
+            <span v-else-if="modelSnapshot?.snapshot_scope === 'persisted'" class="scope-badge is-persisted">已保存</span>
+          </div>
+          <button
+            class="secondary-button"
+            type="button"
+            :disabled="discoveryRunning || probingModels.size > 0"
+            aria-label="刷新模型"
+            @click="refreshModels()"
+          >
+            <RefreshCw :class="{ spin: discoveryRunning }" :size="15" aria-hidden="true" />
+            {{ discoveryRunning ? '刷新中' : '刷新模型' }}
+          </button>
+        </header>
+
+        <div class="probe-cost-notice" role="note">
+          <FlaskConical :size="17" aria-hidden="true" />
+          <div>
+            <strong>本次请求可能产生真实费用</strong>
+            <span>输入约 20-50 Token / 输出最多 64 Token</span>
+          </div>
+        </div>
+
+        <p v-if="discoveryNotice" class="model-notice" role="status">{{ discoveryNotice }}</p>
+        <p v-if="discoveryWarning" class="model-warning" role="alert">{{ discoveryWarning }}</p>
+        <p v-if="modelsError" class="model-warning" role="alert">{{ modelsError }}</p>
+
+        <div class="models-filter-bar">
+          <label class="model-search">
+            <Search :size="15" aria-hidden="true" />
+            <span class="sr-only">搜索当前 Key 的模型</span>
+            <input
+              v-model="modelQuery"
+              type="search"
+              aria-label="搜索当前 Key 的模型"
+              placeholder="搜索模型"
+              autocomplete="off"
+            />
+          </label>
+          <label class="model-filter">
+            <span>测活状态</span>
+            <select v-model="probeFilter" aria-label="测活状态">
+              <option value="all">全部状态</option>
+              <option value="untested">未测试</option>
+              <option value="healthy">健康</option>
+              <option value="reachable_inconclusive">可达未确认</option>
+              <option value="authentication_failed">鉴权失败</option>
+              <option value="model_unavailable">模型不可用</option>
+              <option value="rate_limited">请求受限</option>
+              <option value="timeout">超时</option>
+              <option value="network_error">网络错误</option>
+              <option value="invalid_response">响应无效</option>
+              <option value="unsupported">协议不支持</option>
+            </select>
+          </label>
+        </div>
+
+        <div
+          v-if="modelsState === 'loading' && !modelSnapshot"
+          class="model-state"
+          role="status"
+          aria-label="正在加载模型列表"
+        >
+          <span class="spinner" aria-hidden="true"></span>
+          正在加载模型列表
+        </div>
+        <div v-else-if="modelsState === 'error' && !modelSnapshot" class="model-state is-error">
+          <button class="secondary-button" type="button" @click="loadModels">
+            <RotateCcw :size="15" aria-hidden="true" />
+            重试模型列表
+          </button>
+        </div>
+        <div v-else-if="modelSnapshot && modelSnapshot.models.length === 0" class="model-state">
+          <strong>当前 Key 没有模型</strong>
+        </div>
+        <div v-else-if="modelSnapshot && filteredModels.length === 0" class="model-state">
+          <strong>没有匹配的模型</strong>
+        </div>
+        <div v-else-if="modelSnapshot" class="model-table-wrap">
+          <table class="model-table">
+            <thead>
+              <tr>
+                <th scope="col">模型</th>
+                <th scope="col">发现</th>
+                <th scope="col">测活</th>
+                <th scope="col">协议</th>
+                <th scope="col"><span class="sr-only">操作</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="model in filteredModels" :key="model.id">
+                <td data-label="模型"><strong>{{ model.id }}</strong></td>
+                <td data-label="发现">
+                  <span class="compact-status" :class="model.discovery_status === 'discovered' ? 'is-on' : 'is-unverified'">
+                    {{ model.discovery_status === 'discovered' ? '已发现' : '未验证' }}
+                  </span>
+                </td>
+                <td data-label="测活">
+                  <div class="probe-result">
+                    <strong :class="model.probe ? `is-${model.probe.status}` : ''">
+                      {{ modelProbeLabel(model.probe?.status) }}
+                    </strong>
+                    <span v-if="model.probe">{{ model.probe.latency_ms }} ms</span>
+                  </div>
+                </td>
+                <td data-label="协议">
+                  <select
+                    v-model="protocolByModel[model.id]"
+                    :aria-label="`${model.id} 测试协议`"
+                    :disabled="probingModels.has(model.id)"
+                  >
+                    <option value="auto">自动</option>
+                    <option value="chat_completions">Chat</option>
+                    <option value="responses">Responses</option>
+                    <option value="completions">Completions</option>
+                  </select>
+                </td>
+                <td data-label="操作">
+                  <button
+                    class="secondary-button model-probe-button"
+                    type="button"
+                    :disabled="probingModels.has(model.id) || discoveryRunning"
+                    :aria-label="probeButtonLabel(model)"
+                    @click="probeModel(model)"
+                  >
+                    <FlaskConical :size="14" aria-hidden="true" />
+                    {{ probingModels.has(model.id) ? '测活中' : model.probe ? '重试' : '测活' }}
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
     </SidePanel>
   </section>
 </template>
@@ -820,7 +1209,7 @@ function capabilityLabel(value: string): string {
 .key-table th:nth-child(3) { width: 16%; }
 .key-table th:nth-child(4) { width: 17%; }
 .key-table th:nth-child(5) { width: 20%; }
-.key-table th:nth-child(6) { width: 54px; }
+.key-table th:nth-child(6) { width: 128px; }
 
 .key-table td {
   height: 62px;
@@ -840,6 +1229,30 @@ function capabilityLabel(value: string): string {
 
 .key-name strong { overflow-wrap: anywhere; color: var(--ink); }
 .key-name code { color: var(--muted); font-size: 10px; }
+
+.key-actions {
+  display: flex;
+  min-width: 116px;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.key-load-state {
+  display: flex;
+  min-height: 46px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.key-load-state.is-error {
+  justify-content: space-between;
+  color: #b91c1c;
+  background: var(--red-soft);
+}
 
 .compact-status { padding: 3px 7px; }
 .compact-status.is-on { color: #047857; background: var(--green-soft); }
@@ -1024,6 +1437,206 @@ function capabilityLabel(value: string): string {
   background: var(--surface);
 }
 
+.models-panel {
+  display: grid;
+  min-height: 100%;
+  align-content: start;
+  gap: 12px;
+}
+
+.models-command-bar,
+.models-filter-bar {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.snapshot-meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+.snapshot-meta strong {
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.snapshot-meta code {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.scope-badge {
+  flex: 0 0 auto;
+  padding: 3px 6px;
+  border-radius: 999px;
+  color: #92400e;
+  background: var(--amber-soft);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.scope-badge.is-persisted {
+  color: #047857;
+  background: var(--green-soft);
+}
+
+.probe-cost-notice {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  border: 1px solid #fde68a;
+  border-radius: 6px;
+  color: #92400e;
+  background: #fffbeb;
+}
+
+.probe-cost-notice > div {
+  display: grid;
+  gap: 2px;
+}
+
+.probe-cost-notice strong { font-size: 12px; }
+.probe-cost-notice span { font-size: 10px; }
+
+.model-notice,
+.model-warning {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+}
+
+.model-notice {
+  color: #047857;
+  background: var(--green-soft);
+}
+
+.model-warning {
+  color: #b91c1c;
+  background: var(--red-soft);
+}
+
+.model-search {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 240px;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  padding: 0 9px;
+  color: var(--muted);
+  background: var(--surface);
+}
+
+.model-search input {
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  border: 0;
+  outline: 0;
+  color: var(--ink);
+  background: transparent;
+}
+
+.model-filter {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.model-filter select,
+.model-table select {
+  min-height: 36px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  padding: 0 8px;
+  color: var(--ink);
+  background: var(--surface);
+}
+
+.model-state {
+  display: grid;
+  min-height: 180px;
+  place-items: center;
+  align-content: center;
+  gap: 9px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.model-state.is-error { color: #b91c1c; }
+
+.model-table-wrap {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.model-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.model-table th {
+  height: 36px;
+  padding: 0 9px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  background: var(--surface-subtle);
+  font-size: 10px;
+  text-align: left;
+}
+
+.model-table th:nth-child(1) { width: 28%; }
+.model-table th:nth-child(2) { width: 15%; }
+.model-table th:nth-child(3) { width: 20%; }
+.model-table th:nth-child(4) { width: 20%; }
+.model-table th:nth-child(5) { width: 94px; }
+
+.model-table td {
+  min-width: 0;
+  height: 58px;
+  padding: 8px 9px;
+  border-bottom: 1px solid var(--line);
+  color: #3f3f46;
+  font-size: 11px;
+}
+
+.model-table tr:last-child td { border-bottom: 0; }
+.model-table td > strong { overflow-wrap: anywhere; color: var(--ink); }
+
+.probe-result {
+  display: grid;
+  gap: 2px;
+}
+
+.probe-result strong { color: var(--muted); font-size: 11px; }
+.probe-result strong.is-healthy { color: #047857; }
+.probe-result strong.is-rate_limited,
+.probe-result strong.is-timeout { color: #92400e; }
+.probe-result strong.is-authentication_failed,
+.probe-result strong.is-model_unavailable,
+.probe-result strong.is-invalid_response { color: #b91c1c; }
+.probe-result span { color: var(--muted); font-size: 10px; }
+
+.model-probe-button {
+  min-width: 72px;
+  padding-right: 8px;
+  padding-left: 8px;
+}
+
 @media (max-width: 720px) {
   .resource-header { align-items: flex-start; }
   .resource-strip { grid-template-columns: 1fr; gap: 10px; }
@@ -1050,12 +1663,58 @@ function capabilityLabel(value: string): string {
   .key-table td:nth-child(6) { grid-column: 2; }
   .key-table td:nth-child(2) { grid-row: 1; }
   .key-table td:nth-child(6) { grid-row: 2 / span 3; }
+  .key-actions { min-width: 40px; flex-direction: column; }
   .overview-status,
   .overview-entry { align-items: flex-start; flex-wrap: wrap; }
   .overview-status > button,
   .overview-entry > a { margin-left: 52px; }
   .capability-grid { grid-template-columns: 1fr 1fr; }
   .settings-list > div { grid-template-columns: 100px minmax(0, 1fr); }
+
+  .models-command-bar,
+  .models-filter-bar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .models-command-bar .secondary-button,
+  .model-filter,
+  .model-filter select {
+    width: 100%;
+  }
+
+  .model-filter { justify-content: space-between; }
+  .model-search input,
+  .model-filter select { min-height: 44px; }
+
+  .model-table-wrap { border: 0; overflow: visible; }
+  .model-table,
+  .model-table tbody { display: block; }
+  .model-table thead { display: none; }
+  .model-table tr {
+    display: grid;
+    margin-bottom: 8px;
+    padding: 10px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px 12px;
+  }
+  .model-table td {
+    display: block;
+    height: auto;
+    padding: 0;
+    border: 0;
+  }
+  .model-table td:nth-child(1),
+  .model-table td:nth-child(2),
+  .model-table td:nth-child(3) { grid-column: 1; }
+  .model-table td:nth-child(4),
+  .model-table td:nth-child(5) { grid-column: 2; }
+  .model-table td:nth-child(4) { grid-row: 1 / span 2; }
+  .model-table td:nth-child(5) { grid-row: 3; }
+  .model-table select,
+  .model-probe-button { min-height: 44px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
