@@ -6,12 +6,22 @@ SyncHub is a self-hosted control plane for synchronizing AI API assets to multip
 
 | Role | Supported type | Authentication model |
 | --- | --- | --- |
-| Upstream | New API | Ordinary-user access token; SyncHub reads only that user's tokens, groups, and models. |
-| Upstream | `generic` OpenAI-compatible endpoint | Base URL and shared API key; SyncHub requests only the standard model-list endpoint. |
+| Upstream | New API | Ordinary-user management token; SyncHub manages that user's keys without administrator APIs. |
+| Upstream | `generic` OpenAI-compatible endpoint | Base URL and one or more API keys; each key uses only standard inference endpoints. |
 | Target | New API | Administrator access token. |
 | Target | CLIProxyAPI | Administrator management key. |
 
-New API upstreams only support ordinary-user token discovery. `auto`, `channel`, administrator/root discovery, and specialized CPA or Sub2Api upstream configurations are rejected. A service that exposes an OpenAI-compatible URL and shared API key is configured as `generic` regardless of the product behind it.
+New API upstreams only support ordinary-user token discovery. `auto`, `channel`, administrator/root discovery, and specialized CPA or Sub2Api upstream configurations are rejected. A service that exposes an OpenAI-compatible URL and one or more API keys is configured as `generic` regardless of the product behind it.
+
+Every upstream key owns an independent model snapshot. Model discovery calls the standard `/v1/models` endpoint with only the selected key; a failed or empty refresh keeps the previous successful snapshot. The model panel can run a paid liveness probe for one selected model at a time. Probe prompts are randomized, harmless natural-language tasks generated locally by SyncHub, rather than fixed greetings, identity questions, or `OK` checks.
+
+The normal console workflow is:
+
+1. Add and validate a New API or CLIProxyAPI administrator target.
+2. Add a New API ordinary-user upstream or a generic URL with one or more keys.
+3. Open an upstream, refresh models for each key, and optionally probe individual models.
+4. Select the source key, models, and target on the synchronization workspace.
+5. Review target channels and resolve detected drift.
 
 ## Run with Docker Compose
 
@@ -26,6 +36,14 @@ Open `http://127.0.0.1:8888` and configure targets and upstreams in the console.
 
 ```bash
 docker compose down
+```
+
+To import an existing local configuration into the named volume without adding it to the image or Git history:
+
+```bash
+docker compose up -d
+docker compose exec -T sync-hub sh -c 'umask 077; cat > /data/config.yaml' < data/config.yaml
+docker compose restart sync-hub
 ```
 
 To discard all Compose-managed configuration, run `docker compose down -v`; this deletes the named data volume.
