@@ -187,6 +187,44 @@ describe('Upstream connections workspace', () => {
     expect(within(drawer).queryByLabelText('第 2 个 API Key')).not.toBeInTheDocument()
   })
 
+  it('saves a New API upstream with a numeric ordinary-user ID', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      expect(String(input)).toBe('/api/v1/upstreams')
+      expect(init.method).toBe('POST')
+      expect(JSON.parse(String(init.body))).toEqual({
+        id: 'source-numbered',
+        name: '带用户 ID 的上游',
+        type: 'newapi',
+        base_url: 'https://numbered-source.example.com',
+        user_id: 23,
+        access_token: 'ordinary-user-token',
+      })
+      return envelope({
+        id: 'source-numbered',
+        name: '带用户 ID 的上游',
+        type: 'newapi',
+        base_url: 'https://numbered-source.example.com',
+        user_id: 23,
+        sync_mappings: [],
+      }, 201)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+    await renderPage(UpstreamsPage, '/upstreams')
+
+    await user.click(screen.getByRole('button', { name: '添加上游连接' }))
+    const drawer = screen.getByRole('dialog', { name: '添加上游连接' })
+    await user.type(within(drawer).getByLabelText('连接 ID'), 'source-numbered')
+    await user.type(within(drawer).getByLabelText('连接名称'), '带用户 ID 的上游')
+    await user.type(within(drawer).getByLabelText('Base URL'), 'https://numbered-source.example.com/')
+    await user.type(within(drawer).getByLabelText('New API 用户 ID'), '23')
+    await user.type(within(drawer).getByLabelText('普通用户管理 Token'), 'ordinary-user-token')
+    await user.click(within(drawer).getByRole('button', { name: '保存上游' }))
+
+    expect(await screen.findByText('带用户 ID 的上游')).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
+
   it('presents compact searchable rows with honest per-key summaries', async () => {
     const user = userEvent.setup()
     const { router } = await renderPage(UpstreamsPage, '/upstreams')
@@ -399,6 +437,43 @@ describe('Target instances workspace', () => {
     await user.click(within(drawer).getByRole('radio', { name: 'CPA' }))
     await user.click(save)
     expect(within(drawer).getByRole('alert')).toHaveTextContent('CPA 管理员凭证不能为空')
+  })
+
+  it('saves a New API target with a numeric administrator user ID', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      expect(String(input)).toBe('/api/v1/targets')
+      expect(init.method).toBe('POST')
+      expect(JSON.parse(String(init.body))).toEqual({
+        id: 'target-numbered',
+        name: '带用户 ID 的目标',
+        type: 'newapi',
+        base_url: 'https://numbered-target.example.com',
+        user_id: 42,
+        access_token: 'administrator-token',
+      })
+      return envelope({
+        id: 'target-numbered',
+        name: '带用户 ID 的目标',
+        type: 'newapi',
+        base_url: 'https://numbered-target.example.com',
+        user_id: 42,
+      }, 201)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+    await renderPage(TargetsPage, '/targets')
+
+    await user.click(screen.getByRole('button', { name: '添加目标实例' }))
+    const drawer = screen.getByRole('dialog', { name: '添加目标实例' })
+    await user.type(within(drawer).getByLabelText('实例 ID'), 'target-numbered')
+    await user.type(within(drawer).getByLabelText('实例名称'), '带用户 ID 的目标')
+    await user.type(within(drawer).getByLabelText('Base URL'), 'https://numbered-target.example.com/')
+    await user.type(within(drawer).getByLabelText('New API 用户 ID'), '42')
+    await user.type(within(drawer).getByLabelText('New API 管理员 Token'), 'administrator-token')
+    await user.click(within(drawer).getByRole('button', { name: '保存目标' }))
+
+    expect(await screen.findByText('带用户 ID 的目标')).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledOnce()
   })
 
   it('limits target presets to New API and CPA and persists filters in the URL', async () => {
