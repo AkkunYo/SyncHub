@@ -53,6 +53,13 @@ function envelope(data: unknown, status = 200): Response {
   })
 }
 
+function failure(code: string, message: string, status = 502): Response {
+  return new Response(
+    JSON.stringify({ success: false, error: { code, message }, request_id: 'req-detail-error' }),
+    { status, headers: { 'Content-Type': 'application/json' } },
+  )
+}
+
 async function renderDetail(kind: 'upstream' | 'target') {
   const pinia = createPinia()
   const router = createRouter({
@@ -97,6 +104,8 @@ afterEach(() => {
 
 describe('Connection resource details', () => {
   it('keeps generic keys separate, exposes the sync entry, and never renders credentials', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(envelope({ keys: genericSource.keys }))
+    vi.stubGlobal('fetch', fetchMock)
     await renderDetail('upstream')
 
     expect(screen.getByRole('tablist', { name: '上游详情分区' })).toBeInTheDocument()
@@ -108,11 +117,16 @@ describe('Connection resource details', () => {
     expect(within(keyRow).getByText('未验证')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '进入同步工作台' })).toHaveAttribute('href', '/sync')
     expect(document.body.textContent).not.toContain('sk-')
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/upstreams/source-generic/keys',
+      expect.objectContaining({ method: 'GET' }),
+    )
   })
 
   it('adds a write-only key from the generic connection detail drawer', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
       expect(String(input)).toBe('/api/v1/upstreams/source-generic/keys')
+      if ((init.method ?? 'GET') === 'GET') return envelope({ keys: genericSource.keys })
       expect(init.method).toBe('POST')
       expect(JSON.parse(String(init.body))).toEqual({
         id: 'backup',
@@ -172,5 +186,124 @@ describe('Connection resource details', () => {
       'href',
       '/targets/target-main/channels',
     )
+  })
+
+  it('uses the keys endpoint as the authoritative detail source with loading and retry states', async () => {
+    let releaseKeys: ((response: Response) => void) | undefined
+    const pendingKeys = new Promise<Response>((resolve) => {
+      releaseKeys = resolve
+    })
+    const authoritativeKey = {
+      id: 'server-key',
+      name: '服务端权威 Key',
+      enabled: true,
+      models: ['gpt-5.2'],
+      credential_present: true,
+    }
+    const fetchMock = vi.fn().mockReturnValue(pendingKeys)
+    vi.stubGlobal('fetch', fetchMock)
+
+    await renderDetail('upstream')
+
+    expect(screen.getByRole('status', { name: '正在加载 Key 列表' })).toBeInTheDocument()
+    releaseKeys?.(envelope({ keys: [authoritativeKey] }))
+    expect(await screen.findByText('服务端权威 Key')).toBeInTheDocument()
+    expect(screen.queryByText('主 Key')).not.toBeInTheDocument()
+
+    fetchMock.mockResolvedValueOnce(failure('upstream_failure', 'Key 列表暂时不可用'))
+    fetchMock.mockResolvedValueOnce(envelope({ keys: [authoritativeKey] }))
+    await userEvent.setup().click(screen.getByRole('button', { name: '重新加载 Key 列表' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Key 列表暂时不可用')
+    await userEvent.setup().click(screen.getByRole('button', { name: '重试 Key 列表' }))
+    expect(await screen.findByText('服务端权威 Key')).toBeInTheDocument()
+  })
+
+  it('discovers models and probes one model at a time inside the current-key modal', async () => {
+    const healthyProbe = {
+      key_id: 'primary',
+      model: 'gpt-4o-mini',
+      protocol: 'responses',
+      status: 'healthy',
+      latency_ms: 842,
+      checked_at: '2026-08-05T06:00:00Z',
+      error_code: '',
+      retryable: false,
+      template_version: 'v1',
+    }
+    const modelsResponse = {
+      upstream_id: 'source-generic',
+      key_id: 'primary',
+      snapshot_status: 'ready',
+      discovered_at: '2026-08-05T05:58:00Z',
+      models: [
+        { id: 'gpt-4o-mini', discovery_status: 'discovered', probe: null },
+        {
+          id: 'gpt-4.1',
+          discovery_status: 'discovered',
+          probe: {
+            key_id: 'primary',
+            model: 'gpt-4.1',
+            protocol: 'chat_completions',
+            status: 'rate_limited',
+            latency_ms: 311,
+            checked_at: '2026-08-05T05:30:00Z',
+            error_code: 'rate_limited',
+            retryable: true,
+            template_version: 'v1',
+          },
+        },
+      ],
+    }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const path = String(input)
+      const method = init.method ?? 'GET'
+      if (path === '/api/v1/upstreams/source-generic/keys' && method === 'GET') {
+        return envelope({ keys: genericSource.keys })
+      }
+      if (path === '/api/v1/upstreams/source-generic/keys/primary/models' && method === 'GET') {
+        return envelope(modelsResponse)
+      }
+      if (path === '/api/v1/upstreams/source-generic/model-discoveries' && method === 'POST') {
+        expect(JSON.parse(String(init.body))).toEqual({ key_ids: ['primary'] })
+        return envelope({ task_id: 'task-discovery-1', key_ids: ['primary'] }, 202)
+      }
+      expect(path).toBe('/api/v1/upstreams/source-generic/keys/primary/model-probes')
+      expect(method).toBe('POST')
+      expect(JSON.parse(String(init.body))).toEqual({ model: 'gpt-4o-mini', protocol: 'responses' })
+      return envelope(healthyProbe)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+    await renderDetail('upstream')
+
+    const keyRow = await screen.findByRole('row', { name: /主 Key/ })
+    expect(within(keyRow).getByRole('button', { name: '刷新 主 Key 模型' })).toBeInTheDocument()
+    await user.click(within(keyRow).getByRole('button', { name: '查看 主 Key 模型' }))
+
+    const modal = await screen.findByRole('dialog', { name: '主 Key 模型' })
+    expect(within(modal).getByText('本次请求可能产生真实费用')).toBeInTheDocument()
+    expect(within(modal).getByText('输入约 20-50 Token / 输出最多 64 Token')).toBeInTheDocument()
+    expect(within(modal).getByText('gpt-4o-mini')).toBeInTheDocument()
+    expect(within(modal).getByText('gpt-4.1')).toBeInTheDocument()
+
+    const search = within(modal).getByRole('searchbox', { name: '搜索当前 Key 的模型' })
+    await user.type(search, '4o-mini')
+    expect(within(modal).queryByText('gpt-4.1')).not.toBeInTheDocument()
+    await user.clear(search)
+
+    const modelRow = within(modal).getByRole('row', { name: /gpt-4o-mini/ })
+    await user.selectOptions(within(modelRow).getByLabelText('gpt-4o-mini 测试协议'), 'responses')
+    await user.click(within(modelRow).getByRole('button', { name: '测活 gpt-4o-mini' }))
+    expect(await within(modelRow).findByText('健康')).toBeInTheDocument()
+    expect(within(modelRow).getByText('842 ms')).toBeInTheDocument()
+
+    await user.selectOptions(within(modal).getByLabelText('测活状态'), 'rate_limited')
+    const limitedRow = within(modal).getByRole('row', { name: /gpt-4.1/ })
+    expect(within(limitedRow).getByRole('button', { name: '重试 gpt-4.1' })).toBeInTheDocument()
+
+    await user.click(within(modal).getByRole('button', { name: '刷新模型' }))
+    expect(await within(modal).findByText('模型发现任务已提交')).toBeInTheDocument()
+    expect(document.body.textContent).not.toContain('sk-primary')
+    expect(document.body.textContent).not.toContain('请把')
   })
 })

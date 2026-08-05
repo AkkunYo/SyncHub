@@ -142,6 +142,9 @@ describe('SyncHub API client', () => {
     })
     await api.updateUpstreamKey('source/a', 'key/a', { name: 'Renamed', enabled: false })
     await api.deleteUpstreamKey('source/a', 'key/a')
+    await api.discoverModels('source/a', ['key/a'])
+    await api.getKeyModels('source/a', 'key/a')
+    await api.probeModel('source/a', 'key/a', { model: 'gpt-4o-mini', protocol: 'responses' })
     await api.getChannels('target/a')
     await api.updateChannel('target/a', 'channel/1', {
       name: 'Channel',
@@ -175,6 +178,9 @@ describe('SyncHub API client', () => {
       'POST /api/v1/upstreams/source%2Fa/keys',
       'PATCH /api/v1/upstreams/source%2Fa/keys/key%2Fa',
       'DELETE /api/v1/upstreams/source%2Fa/keys/key%2Fa',
+      'POST /api/v1/upstreams/source%2Fa/model-discoveries',
+      'GET /api/v1/upstreams/source%2Fa/keys/key%2Fa/models',
+      'POST /api/v1/upstreams/source%2Fa/keys/key%2Fa/model-probes',
       'GET /api/v1/targets/target%2Fa/channels',
       'PUT /api/v1/targets/target%2Fa/channels/channel%2F1',
       'DELETE /api/v1/targets/target%2Fa/channels/channel%2F1',
