@@ -294,6 +294,8 @@ describe('Connection resource details', () => {
     await user.click(within(keyRow).getByRole('button', { name: '查看 主 Key 模型' }))
 
     const modal = await screen.findByRole('dialog', { name: '主 Key 模型' })
+    expect(modal).toHaveAttribute('data-presentation', 'modal')
+    expect(modal).not.toHaveAttribute('data-side')
     expect(within(modal).getByText('本次请求可能产生真实费用')).toBeInTheDocument()
     expect(within(modal).getByText('输入约 20-50 Token / 输出最多 64 Token')).toBeInTheDocument()
     expect(within(modal).getByText('本次运行')).toBeInTheDocument()
