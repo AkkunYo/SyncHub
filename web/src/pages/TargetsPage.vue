@@ -52,7 +52,7 @@ const form = reactive({
   name: '',
   type: 'newapi' as TargetPlatformType,
   baseUrl: '',
-  userId: '',
+  userId: '' as string | number,
   credential: '',
 })
 
@@ -152,7 +152,7 @@ function validHTTPURL(value: string): boolean {
 }
 
 function normalizedUserID(): number | null | undefined {
-  const value = form.userId.trim()
+  const value = String(form.userId).trim()
   if (!value) return undefined
   if (!/^\d+$/.test(value)) return null
   const parsed = Number(value)
