@@ -249,7 +249,7 @@ async function saveAppSettings(): Promise<void> {
   <section class="page" aria-labelledby="settings-heading">
     <header class="page-header">
       <div>
-        <h1 id="settings-heading">设置</h1>
+        <h1 id="settings-heading" aria-label="设置">系统设置</h1>
       </div>
     </header>
 
@@ -294,99 +294,101 @@ async function saveAppSettings(): Promise<void> {
       :hidden="activeSettingsTab !== 'instances'"
       aria-labelledby="settings-instances-tab"
     >
-      <div class="settings-grid">
-        <section class="settings-band" aria-labelledby="targets-settings-heading">
-          <header class="section-header">
-            <div>
-              <h2 id="targets-settings-heading">目标实例</h2>
-              <span>{{ store.targets.length }} 个</span>
-            </div>
-            <button class="secondary-button" type="button" aria-label="添加目标实例" @click="openAdd('target')">
-              <Plus :size="16" aria-hidden="true" />
-              添加目标
-            </button>
-          </header>
-          <div v-if="store.targets.length === 0" class="inline-empty">暂无目标实例</div>
-          <div v-else class="instance-list">
-            <div v-for="target in store.targets" :key="target.id" class="instance-row">
-              <div class="instance-primary">
-                <strong>{{ target.name }}</strong>
-                <small>{{ target.id }} / {{ target.type }}</small>
-                <small v-if="target.type === 'newapi' && target.user_id && target.user_id > 0">
-                  用户 ID {{ target.user_id }}
-                </small>
+      <section class="settings-surface" aria-label="实例与连接配置">
+        <div class="settings-grid">
+          <section class="settings-band" aria-labelledby="targets-settings-heading">
+            <header class="section-header">
+              <div>
+                <h2 id="targets-settings-heading">目标实例</h2>
+                <span>{{ store.targets.length }} 个</span>
               </div>
-              <code>{{ target.base_url }}</code>
-              <div class="row-actions">
-                <button
-                  class="icon-button icon-button-small"
-                  type="button"
-                  :aria-label="`编辑目标实例 ${target.name}`"
-                  title="编辑目标实例"
-                  @click="openEdit('target', target)"
-                >
-                  <Pencil :size="16" aria-hidden="true" />
-                </button>
-                <button
-                  class="icon-button icon-button-small danger-icon"
-                  type="button"
-                  :aria-label="`删除目标实例 ${target.name}`"
-                  title="删除目标实例"
-                  @click="askDelete('target', target.id, target.name)"
-                >
-                  <Trash2 :size="16" aria-hidden="true" />
-                </button>
+              <button class="secondary-button" type="button" aria-label="添加目标实例" @click="openAdd('target')">
+                <Plus :size="16" aria-hidden="true" />
+                添加目标
+              </button>
+            </header>
+            <div v-if="store.targets.length === 0" class="inline-empty">暂无目标实例</div>
+            <div v-else class="instance-list">
+              <div v-for="target in store.targets" :key="target.id" class="instance-row">
+                <div class="instance-primary">
+                  <strong>{{ target.name }}</strong>
+                  <small>{{ target.id }} / {{ target.type }}</small>
+                  <small v-if="target.type === 'newapi' && target.user_id && target.user_id > 0">
+                    用户 ID {{ target.user_id }}
+                  </small>
+                </div>
+                <code>{{ target.base_url }}</code>
+                <div class="row-actions">
+                  <button
+                    class="icon-button icon-button-small"
+                    type="button"
+                    :aria-label="`编辑目标实例 ${target.name}`"
+                    title="编辑目标实例"
+                    @click="openEdit('target', target)"
+                  >
+                    <Pencil :size="16" aria-hidden="true" />
+                  </button>
+                  <button
+                    class="icon-button icon-button-small danger-icon"
+                    type="button"
+                    :aria-label="`删除目标实例 ${target.name}`"
+                    title="删除目标实例"
+                    @click="askDelete('target', target.id, target.name)"
+                  >
+                    <Trash2 :size="16" aria-hidden="true" />
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
-        </section>
+          </section>
 
-        <section class="settings-band" aria-labelledby="upstreams-settings-heading">
-          <header class="section-header">
-            <div>
-              <h2 id="upstreams-settings-heading">上游实例</h2>
-              <span>{{ store.upstreams.length }} 个</span>
-            </div>
-            <button class="secondary-button" type="button" aria-label="添加上游实例" @click="openAdd('upstream')">
-              <Plus :size="16" aria-hidden="true" />
-              添加上游
-            </button>
-          </header>
-          <div v-if="store.upstreams.length === 0" class="inline-empty">暂无上游实例</div>
-          <div v-else class="instance-list">
-            <div v-for="source in store.upstreams" :key="source.id" class="instance-row">
-              <div class="instance-primary">
-                <strong>{{ source.name }}</strong>
-                <small>{{ source.id }} / {{ source.type }}</small>
-                <small v-if="source.type === 'newapi' && source.user_id && source.user_id > 0">
-                  用户 ID {{ source.user_id }}
-                </small>
+          <section class="settings-band" aria-labelledby="upstreams-settings-heading">
+            <header class="section-header">
+              <div>
+                <h2 id="upstreams-settings-heading">上游实例</h2>
+                <span>{{ store.upstreams.length }} 个</span>
               </div>
-              <code>{{ source.base_url }}</code>
-              <div class="row-actions">
-                <button
-                  class="icon-button icon-button-small"
-                  type="button"
-                  :aria-label="`编辑上游实例 ${source.name}`"
-                  title="编辑上游实例"
-                  @click="openEdit('upstream', source)"
-                >
-                  <Pencil :size="16" aria-hidden="true" />
-                </button>
-                <button
-                  class="icon-button icon-button-small danger-icon"
-                  type="button"
-                  :aria-label="`删除上游实例 ${source.name}`"
-                  title="删除上游实例"
-                  @click="askDelete('upstream', source.id, source.name)"
-                >
-                  <Trash2 :size="16" aria-hidden="true" />
-                </button>
+              <button class="secondary-button" type="button" aria-label="添加上游实例" @click="openAdd('upstream')">
+                <Plus :size="16" aria-hidden="true" />
+                添加上游
+              </button>
+            </header>
+            <div v-if="store.upstreams.length === 0" class="inline-empty">暂无上游实例</div>
+            <div v-else class="instance-list">
+              <div v-for="source in store.upstreams" :key="source.id" class="instance-row">
+                <div class="instance-primary">
+                  <strong>{{ source.name }}</strong>
+                  <small>{{ source.id }} / {{ source.type }}</small>
+                  <small v-if="source.type === 'newapi' && source.user_id && source.user_id > 0">
+                    用户 ID {{ source.user_id }}
+                  </small>
+                </div>
+                <code>{{ source.base_url }}</code>
+                <div class="row-actions">
+                  <button
+                    class="icon-button icon-button-small"
+                    type="button"
+                    :aria-label="`编辑上游实例 ${source.name}`"
+                    title="编辑上游实例"
+                    @click="openEdit('upstream', source)"
+                  >
+                    <Pencil :size="16" aria-hidden="true" />
+                  </button>
+                  <button
+                    class="icon-button icon-button-small danger-icon"
+                    type="button"
+                    :aria-label="`删除上游实例 ${source.name}`"
+                    title="删除上游实例"
+                    @click="askDelete('upstream', source.id, source.name)"
+                  >
+                    <Trash2 :size="16" aria-hidden="true" />
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
-        </section>
-      </div>
+          </section>
+        </div>
+      </section>
     </div>
 
     <div
@@ -397,7 +399,7 @@ async function saveAppSettings(): Promise<void> {
       :hidden="activeSettingsTab !== 'runtime'"
       aria-labelledby="settings-runtime-tab"
     >
-      <section class="settings-band" aria-labelledby="runtime-settings-heading">
+      <section class="settings-band settings-surface" aria-labelledby="runtime-settings-heading">
         <header class="section-header">
           <div>
             <h2 id="runtime-settings-heading">运行设置</h2>
@@ -502,3 +504,72 @@ async function saveAppSettings(): Promise<void> {
     </ModalDialog>
   </section>
 </template>
+
+<style scoped>
+.settings-tabs {
+  margin-bottom: 0;
+}
+
+.settings-surface {
+  min-width: 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.settings-grid {
+  display: block;
+}
+
+.settings-band {
+  margin: 0;
+  padding: 0 12px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.settings-band:last-child {
+  border-bottom: 0;
+}
+
+.settings-band.settings-surface {
+  padding: 0 12px 14px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.section-header {
+  min-height: 50px;
+}
+
+.instance-row {
+  min-height: 54px;
+}
+
+.runtime-form {
+  padding: 10px 0 0;
+}
+
+@media (max-width: 620px) {
+  .settings-band,
+  .settings-band.settings-surface {
+    padding-right: 8px;
+    padding-left: 8px;
+  }
+
+  .section-header {
+    align-items: flex-start;
+    padding: 8px 0;
+  }
+
+  .instance-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .runtime-form {
+    grid-template-columns: 1fr;
+  }
+}
+</style>

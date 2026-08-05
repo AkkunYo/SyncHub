@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { Check, RefreshCw, RotateCcw } from 'lucide-vue-next'
+import { Check, RefreshCw, RotateCcw, ScanSearch, TriangleAlert } from 'lucide-vue-next'
 
 import { api, safeErrorMessage } from '@/api/client'
 import { useConsoleStore } from '@/stores/console'
@@ -18,6 +18,7 @@ const currentMatrix = computed(() =>
 const visibleDriftItems = computed(() =>
   store.matrixState === 'ready' && currentMatrix.value ? store.driftItems : [],
 )
+const driftSummaryReady = computed(() => store.matrixState === 'ready' && currentMatrix.value !== null)
 
 const fieldLabels: Record<string, string> = {
   models: '模型',
@@ -93,18 +94,35 @@ async function reconcileAll(): Promise<void> {
 
 <template>
   <section class="page" aria-labelledby="drift-heading">
-    <header class="page-header">
-      <h1 id="drift-heading">配置漂移</h1>
+    <header class="page-header drift-page-header">
+      <div>
+        <h1 id="drift-heading" aria-label="配置漂移">
+          <span aria-hidden="true">漂移修复</span>
+          <span class="sr-only">配置漂移</span>
+        </h1>
+        <p class="page-context">{{ store.selectedUpstreamId || '未选择上游' }}</p>
+      </div>
+    </header>
+
+    <section class="drift-command-bar" role="toolbar" aria-label="漂移扫描">
+      <div class="pending-summary" aria-live="polite">
+        <TriangleAlert v-if="visibleDriftItems.length" :size="17" aria-hidden="true" />
+        <Check v-else :size="17" aria-hidden="true" />
+        <strong>{{ driftSummaryReady ? `${visibleDriftItems.length} 项待处理` : '--' }}</strong>
+        <span>{{ store.targets.length }} 个目标</span>
+      </div>
       <button
         class="secondary-button"
         type="button"
+        aria-label="校验全部目标"
         :disabled="reconciling || store.targets.length === 0 || !store.selectedUpstreamId"
         @click="reconcileAll"
       >
-        <RefreshCw :size="16" aria-hidden="true" />
-        {{ reconciling ? '校验中' : '校验全部目标' }}
+        <RefreshCw v-if="reconciling" :size="16" aria-hidden="true" />
+        <ScanSearch v-else :size="16" aria-hidden="true" />
+        {{ reconciling ? '扫描中' : '扫描漂移' }}
       </button>
-    </header>
+    </section>
 
     <p v-if="notice" class="notice notice-success" role="status">{{ notice }}</p>
     <p v-if="error" class="notice notice-error" role="alert">{{ error }}</p>
@@ -169,7 +187,7 @@ async function reconcileAll(): Promise<void> {
             @click="accept(item)"
           >
             <Check :size="16" aria-hidden="true" />
-            {{ acceptingKeys.has(driftKey(item)) ? '接受中' : '接受目标状态' }}
+            {{ acceptingKeys.has(driftKey(item)) ? '采纳中' : '采纳目标状态' }}
           </button>
         </header>
         <dl class="difference-list">
@@ -182,3 +200,89 @@ async function reconcileAll(): Promise<void> {
     </div>
   </section>
 </template>
+
+<style scoped>
+.drift-page-header {
+  min-height: 38px;
+}
+
+.page-context {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.drift-command-bar {
+  display: flex;
+  min-height: 54px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.pending-summary {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  color: var(--amber);
+}
+
+.pending-summary strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.pending-summary span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.drift-list {
+  gap: 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.drift-row {
+  padding: 14px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.drift-row:last-child {
+  border-bottom: 0;
+}
+
+.difference-list {
+  border-radius: 4px;
+}
+
+@media (max-width: 620px) {
+  .drift-command-bar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .drift-command-bar .secondary-button {
+    width: 100%;
+  }
+
+  .drift-row {
+    display: grid;
+    padding: 12px 10px;
+  }
+
+  .pending-summary {
+    min-height: 32px;
+  }
+}
+</style>

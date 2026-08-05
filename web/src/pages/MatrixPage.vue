@@ -1,6 +1,15 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { RefreshCw, RotateCcw, Search, Send, SlidersHorizontal, X } from 'lucide-vue-next'
+import {
+  CheckCircle2,
+  Circle,
+  RefreshCw,
+  RotateCcw,
+  Search,
+  Send,
+  SlidersHorizontal,
+  X,
+} from 'lucide-vue-next'
 
 import { api } from '@/api/client'
 import ModalDialog from '@/components/ModalDialog.vue'
@@ -86,6 +95,13 @@ const resultSummary = computed(() => {
 const retryableFailureCount = computed(() =>
   results.value.flatMap((result) => result.targets).filter((target) => target.status === 'failed' && target.retryable).length,
 )
+const setupSteps = computed(() => [
+  { label: '配置目标实例', complete: store.targets.length > 0 },
+  { label: '配置上游连接', complete: store.upstreams.length > 0 },
+  { label: '刷新来源资产', complete: rows.value.length > 0 },
+  { label: '选择资产并同步', complete: syncedCount.value > 0 },
+])
+const completedSetupSteps = computed(() => setupSteps.value.filter((step) => step.complete).length)
 
 function isSelectable(row: MatrixRow): boolean {
   if (!row.asset.enabled || !row.asset.secret_readable) return false
@@ -313,12 +329,18 @@ function matrixStatusLabel(status: string): string {
 
 <template>
   <section class="page" aria-labelledby="matrix-heading">
-    <header class="page-header">
-      <h1 id="matrix-heading">资产矩阵</h1>
+    <header class="page-header workspace-page-header">
+      <div>
+        <h1 id="matrix-heading" aria-label="资产矩阵">
+          <span aria-hidden="true">同步工作台</span>
+          <span class="sr-only">资产矩阵</span>
+        </h1>
+        <p class="page-context">{{ rows.length }} 个来源资产 / {{ matrixTargets.length }} 个目标实例</p>
+      </div>
     </header>
 
     <div
-      class="workspace-panel"
+      class="workspace-panel sync-workspace"
       :class="{ 'data-refreshing': isRefreshing }"
       :aria-busy="store.matrixState === 'loading'"
     >
@@ -392,16 +414,34 @@ function matrixStatusLabel(status: string): string {
         </button>
       </div>
 
-      <div v-else-if="store.upstreams.length === 0" class="state-panel">
-        <SlidersHorizontal :size="24" aria-hidden="true" />
-        <h2>尚未配置上游实例</h2>
-        <button class="primary-button" type="button" @click="store.navigate('settings')">前往设置</button>
-      </div>
-
-      <div v-else-if="store.targets.length === 0" class="state-panel">
-        <SlidersHorizontal :size="24" aria-hidden="true" />
-        <h2>尚未配置目标实例</h2>
-        <button class="primary-button" type="button" @click="store.navigate('settings')">前往设置</button>
+      <div
+        v-else-if="store.upstreams.length === 0 || store.targets.length === 0"
+        class="setup-state"
+      >
+        <p v-if="store.upstreams.length === 0" class="sr-only">尚未配置上游实例</p>
+        <p v-if="store.targets.length === 0" class="sr-only">尚未配置目标实例</p>
+        <header class="setup-header">
+          <span class="setup-icon"><SlidersHorizontal :size="19" aria-hidden="true" /></span>
+          <div>
+            <h2>首次同步设置</h2>
+            <p>{{ completedSetupSteps }} / {{ setupSteps.length }} 已完成</p>
+          </div>
+        </header>
+        <ol class="setup-checklist" aria-label="首次同步步骤">
+          <li v-for="(step, index) in setupSteps" :key="step.label" :class="{ complete: step.complete }">
+            <CheckCircle2 v-if="step.complete" :size="18" aria-hidden="true" />
+            <Circle v-else :size="18" aria-hidden="true" />
+            <span><small>步骤 {{ index + 1 }}</small>{{ step.label }}</span>
+          </li>
+        </ol>
+        <button
+          class="primary-button setup-action"
+          type="button"
+          aria-label="前往设置"
+          @click="store.navigate('settings')"
+        >
+          打开系统设置
+        </button>
       </div>
 
       <div v-else-if="rows.length === 0" class="state-panel">
@@ -423,23 +463,6 @@ function matrixStatusLabel(status: string): string {
           <button class="secondary-button" type="button" @click="retryMatrix">
             <RotateCcw :size="16" aria-hidden="true" />
             重试
-          </button>
-        </div>
-
-        <div v-if="selectedRows.length" class="selection-toolbar" role="toolbar" aria-label="批量操作">
-          <span>{{ selectedRows.length }} 个已选择</span>
-          <button class="secondary-button" type="button" aria-label="清除选择" @click="clearSelection">
-            <X :size="16" aria-hidden="true" />
-            清除选择
-          </button>
-          <button
-            class="primary-button"
-            type="button"
-            :aria-label="`批量同步 ${selectedRows.length} 个资产`"
-            @click="openSync"
-          >
-            <Send :size="16" aria-hidden="true" />
-            批量同步
           </button>
         </div>
 
@@ -518,6 +541,25 @@ function matrixStatusLabel(status: string): string {
       </template>
     </div>
 
+    <div class="selection-dock">
+      <div v-if="selectedRows.length" class="selection-toolbar" role="toolbar" aria-label="批量操作">
+        <span>{{ selectedRows.length }} 个已选择</span>
+        <button class="secondary-button" type="button" aria-label="清除选择" @click="clearSelection">
+          <X :size="16" aria-hidden="true" />
+          清除选择
+        </button>
+        <button
+          class="primary-button"
+          type="button"
+          :aria-label="`批量同步 ${selectedRows.length} 个资产`"
+          @click="openSync"
+        >
+          <Send :size="16" aria-hidden="true" />
+          批量同步
+        </button>
+      </div>
+    </div>
+
     <ModalDialog v-if="syncOpen" title="批量同步设置" close-label="关闭批量同步" @close="closeSync">
       <form class="form-stack" @submit.prevent="submitSync">
         <div class="form-grid">
@@ -593,3 +635,172 @@ function matrixStatusLabel(status: string): string {
     </ModalDialog>
   </section>
 </template>
+
+<style scoped>
+.workspace-page-header {
+  min-height: 38px;
+}
+
+.page-context {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sync-workspace {
+  box-shadow: none;
+}
+
+.sync-workspace :deep(.workspace-toolbar) {
+  min-height: 54px;
+  padding: 8px 10px;
+  background: var(--surface);
+}
+
+.sync-workspace :deep(.metric-strip > div) {
+  min-height: 52px;
+}
+
+.sync-workspace :deep(.metric-strip strong) {
+  font-size: 17px;
+}
+
+.setup-state {
+  display: grid;
+  gap: 0;
+  min-height: 270px;
+  align-content: center;
+  padding: 24px;
+  background: var(--surface);
+}
+
+.setup-header {
+  display: flex;
+  width: min(100%, 680px);
+  align-items: center;
+  gap: 12px;
+  margin: 0 auto 12px;
+}
+
+.setup-header h2,
+.setup-header p {
+  margin: 0;
+}
+
+.setup-header p {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.setup-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  place-items: center;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  color: var(--blue);
+  background: var(--blue-soft);
+}
+
+.setup-checklist {
+  display: grid;
+  width: min(100%, 680px);
+  margin: 0 auto;
+  padding: 0;
+  border-top: 1px solid var(--line);
+  list-style: none;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.setup-checklist li {
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.setup-checklist li:nth-child(even) {
+  border-right: 0;
+}
+
+.setup-checklist li.complete {
+  color: #047857;
+}
+
+.setup-checklist span {
+  display: grid;
+  gap: 2px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.setup-checklist small {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.setup-action {
+  justify-self: center;
+  margin-top: 16px;
+}
+
+.selection-dock {
+  position: sticky;
+  z-index: 12;
+  bottom: calc(10px + env(safe-area-inset-bottom));
+  display: flex;
+  min-height: 58px;
+  align-items: flex-end;
+  pointer-events: none;
+}
+
+.selection-dock .selection-toolbar {
+  width: 100%;
+  min-height: 50px;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+  pointer-events: auto;
+}
+
+@media (max-width: 620px) {
+  .workspace-page-header {
+    display: block;
+  }
+
+  .setup-state {
+    padding: 18px 12px;
+  }
+
+  .setup-checklist {
+    grid-template-columns: 1fr;
+  }
+
+  .setup-checklist li,
+  .setup-checklist li:nth-child(even) {
+    border-right: 0;
+  }
+
+  .matrix-table tbody tr {
+    border-left: 3px solid var(--line);
+  }
+
+  .selection-dock {
+    bottom: calc(6px + env(safe-area-inset-bottom));
+    min-height: 66px;
+  }
+
+  .selection-dock .selection-toolbar {
+    padding: 8px;
+  }
+}
+</style>
