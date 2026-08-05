@@ -198,6 +198,47 @@ describe('SyncHub console', () => {
     expect(within(navigation).getByRole('link', { name: '漂移修复' })).toHaveAttribute('aria-current', 'page')
   })
 
+  it('collapses the desktop navigation and restores the saved workspace preference', async () => {
+    installConsoleApi()
+    const user = userEvent.setup()
+    const firstRender = renderApp()
+
+    const collapseButton = await screen.findByRole('button', { name: '收起导航' })
+    const shell = document.querySelector('.app-shell')
+    expect(shell).not.toHaveClass('sidebar-collapsed')
+
+    await user.click(collapseButton)
+    expect(shell).toHaveClass('sidebar-collapsed')
+    expect(collapseButton).toHaveAccessibleName('展开导航')
+    expect(window.localStorage.getItem('synchub.sidebar.collapsed')).toBe('true')
+
+    firstRender.unmount()
+    renderApp()
+
+    expect(await screen.findByRole('button', { name: '展开导航' })).toBeInTheDocument()
+    expect(document.querySelector('.app-shell')).toHaveClass('sidebar-collapsed')
+  })
+
+  it('refreshes the console from the global header without changing routes', async () => {
+    const fetchMock = installConsoleApi()
+    const user = userEvent.setup()
+    const { router } = renderApp()
+
+    await router.push('/targets')
+    expect(await screen.findByRole('heading', { name: '目标实例' })).toBeInTheDocument()
+    const configCallsBeforeRefresh = fetchMock.mock.calls
+      .filter(([input]) => String(input).includes('/api/v1/config')).length
+
+    await user.click(screen.getByRole('button', { name: '刷新控制台' }))
+
+    await waitFor(() => {
+      const configCallsAfterRefresh = fetchMock.mock.calls
+        .filter(([input]) => String(input).includes('/api/v1/config')).length
+      expect(configCallsAfterRefresh).toBe(configCallsBeforeRefresh + 1)
+    })
+    expect(window.location.pathname).toBe('/targets')
+  })
+
   it('keeps every documented detail URL addressable', async () => {
     installConsoleApi()
     const { router } = renderApp()

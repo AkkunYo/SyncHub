@@ -25,10 +25,12 @@ describe('console accessibility styles', () => {
   it('defines a compact operations-console shell with stable dimensions', () => {
     expect(styles).toContain('--app-header-height: 48px;')
     expect(styles).toContain('--sidebar-width: 216px;')
+    expect(styles).toContain('--sidebar-collapsed-width: 64px;')
+    expect(styles).toContain('--sidebar-current-width: var(--sidebar-width);')
     expect(styles).toContain('--touch-target: 44px;')
     expect(ruleBody('.app-header')).toContain('height: var(--app-header-height);')
-    expect(ruleBody('.desktop-sidebar')).toContain('width: var(--sidebar-width);')
-    expect(ruleBody('.app-main')).toContain('margin-left: var(--sidebar-width);')
+    expect(ruleBody('.desktop-sidebar')).toContain('width: var(--sidebar-current-width);')
+    expect(ruleBody('.app-main')).toContain('margin-left: var(--sidebar-current-width);')
   })
 
   it('keeps build metadata in an unframed sidebar footer', () => {
