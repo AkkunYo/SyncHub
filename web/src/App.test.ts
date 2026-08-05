@@ -328,11 +328,15 @@ describe('SyncHub console', () => {
     renderApp()
 
     const topbar = await screen.findByRole('banner', { name: 'SyncHub 控制台顶栏' })
-    expect(within(topbar).getByText('SyncHub')).toBeInTheDocument()
-    expect(within(topbar).getByLabelText('本地管理 API')).toHaveTextContent('最近检查正常')
+    expect(within(topbar).getByRole('link', { name: 'SyncHub 首页' })).toHaveAttribute('href', '/sync')
+    expect(within(topbar).getByRole('status', { name: '本地管理 API' })).toHaveTextContent('最近检查正常')
     expect(within(topbar).getByText('同步工作台')).toBeInTheDocument()
 
-    const navigation = screen.getByRole('navigation', { name: '主导航' })
+    const sidebar = screen.getByRole('complementary', { name: '控制台导航' })
+    const navigation = within(sidebar).getByRole('navigation', { name: '主导航' })
+    const buildInfo = within(sidebar).getByRole('contentinfo', { name: '构建信息' })
+    expect(buildInfo).toHaveTextContent('版本 v1.3.0')
+    expect(buildInfo).toHaveTextContent('编译 2026-07-29 16:00:00')
     const main = screen.getByRole('main')
     const expectPage = async (navigationLabel: string, heading: string) => {
       await waitFor(() => {
@@ -373,9 +377,12 @@ describe('SyncHub console', () => {
 
     renderApp()
 
-    expect(await screen.findByText('版本 v1.3.0')).toBeInTheDocument()
-    expect(screen.getByText('编译 2026-07-29 16:00:00')).toBeInTheDocument()
-    expect(within(screen.getByLabelText('本地管理 API')).getByText('最近检查正常')).toBeInTheDocument()
+    const sidebar = await screen.findByRole('complementary', { name: '控制台导航' })
+    const buildInfo = within(sidebar).getByRole('contentinfo', { name: '构建信息' })
+    expect(within(buildInfo).getByText('版本 v1.3.0')).toBeInTheDocument()
+    expect(within(buildInfo).getByText('编译 2026-07-29 16:00:00')).toBeInTheDocument()
+    expect(within(screen.getByRole('status', { name: '本地管理 API' })).getByText('最近检查正常'))
+      .toBeInTheDocument()
   })
 
   it('reports an unknown API status when the health check fails', async () => {
@@ -1151,15 +1158,17 @@ describe('SyncHub console', () => {
     await user.click(menuButton)
 
     expect(menuButton).toHaveAttribute('aria-expanded', 'true')
-    const mobileNavigation = screen.getByRole('navigation', { name: '移动端主导航' })
+    const drawer = screen.getByRole('dialog', { name: '控制台导航' })
+    expect(drawer).toHaveAttribute('aria-modal', 'true')
+    const mobileNavigation = within(drawer).getByRole('navigation', { name: '移动端主导航' })
     expect(mobileNavigation).toHaveAttribute('data-open', 'true')
-    const activeMobileItem = within(mobileNavigation).getByRole('link', { name: '同步工作台' })
+    const closeButton = within(drawer).getByRole('button', { name: '关闭导航' })
     const lastMobileItem = within(mobileNavigation).getByRole('link', { name: '系统设置' })
-    expect(activeMobileItem).toHaveFocus()
+    expect(closeButton).toHaveFocus()
     await fireEvent.keyDown(document, { key: 'Tab', shiftKey: true })
     expect(lastMobileItem).toHaveFocus()
     await fireEvent.keyDown(document, { key: 'Tab' })
-    expect(activeMobileItem).toHaveFocus()
+    expect(closeButton).toHaveFocus()
     await user.click(within(mobileNavigation).getByRole('link', { name: '系统设置' }))
 
     expect(menuButton).toHaveAttribute('aria-expanded', 'false')
