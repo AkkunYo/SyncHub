@@ -24,7 +24,7 @@ const genericSource = {
     },
   ],
   sync_mappings: [],
-} as const
+}
 
 const target = {
   id: 'target-main',
@@ -32,7 +32,7 @@ const target = {
   type: 'newapi',
   base_url: 'https://target.example.com',
   user_id: 9,
-} as const
+}
 
 const config = {
   app: {
@@ -168,7 +168,7 @@ describe('Connection resource details', () => {
     await user.click(screen.getByRole('button', { name: '验证目标连接' }))
     expect(await screen.findByText('连接验证通过')).toBeInTheDocument()
     expect(screen.getByText('6 个渠道')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: '管理目标渠道' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: '查看渠道' })).toHaveAttribute(
       'href',
       '/targets/target-main/channels',
     )

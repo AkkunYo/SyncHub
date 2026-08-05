@@ -2,6 +2,7 @@ import type {
   AppSettings,
   Channel,
   ChannelInput,
+  ConnectionTestResult,
   MatrixData,
   RuntimeInfo,
   SanitizedConfig,
@@ -9,6 +10,9 @@ import type {
   TargetConfig,
   UpstreamAsset,
   UpstreamConfig,
+  UpstreamKey,
+  UpstreamKeyCreateInput,
+  UpstreamKeyUpdateInput,
 } from '@/types'
 
 const API_PREFIX = '/api/v1'
@@ -29,7 +33,7 @@ interface ErrorEnvelope {
 }
 
 interface RequestOptions {
-  method?: 'GET' | 'POST' | 'PUT' | 'DELETE'
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
   body?: unknown
   signal?: AbortSignal
 }
@@ -131,6 +135,23 @@ export const api = {
     request<UpstreamConfig>(`/upstreams/${segment(upstreamId)}`, { method: 'PUT', body: input }),
   deleteUpstream: (upstreamId: string) =>
     request<Record<string, never>>(`/upstreams/${segment(upstreamId)}`, { method: 'DELETE' }),
+  testTargetConnection: (targetId: string) =>
+    request<ConnectionTestResult>(`/targets/${segment(targetId)}/connection-tests`, { method: 'POST' }),
+  testUpstreamConnection: (upstreamId: string) =>
+    request<ConnectionTestResult>(`/upstreams/${segment(upstreamId)}/connection-tests`, { method: 'POST' }),
+  getUpstreamKeys: (upstreamId: string, signal?: AbortSignal) =>
+    request<{ keys: UpstreamKey[] }>(`/upstreams/${segment(upstreamId)}/keys`, { signal }),
+  createUpstreamKey: (upstreamId: string, input: UpstreamKeyCreateInput) =>
+    request<UpstreamKey>(`/upstreams/${segment(upstreamId)}/keys`, { method: 'POST', body: input }),
+  updateUpstreamKey: (upstreamId: string, keyId: string, input: UpstreamKeyUpdateInput) =>
+    request<UpstreamKey>(`/upstreams/${segment(upstreamId)}/keys/${segment(keyId)}`, {
+      method: 'PATCH',
+      body: input,
+    }),
+  deleteUpstreamKey: (upstreamId: string, keyId: string) =>
+    request<Record<string, never>>(`/upstreams/${segment(upstreamId)}/keys/${segment(keyId)}`, {
+      method: 'DELETE',
+    }),
   getChannels: (targetId: string, signal?: AbortSignal) =>
     request<{ channels: Channel[] }>(`/targets/${segment(targetId)}/channels`, { signal }),
   updateChannel: (targetId: string, channelId: string, input: ChannelInput) =>

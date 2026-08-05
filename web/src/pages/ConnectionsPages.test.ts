@@ -91,6 +91,8 @@ async function renderPage(page: typeof UpstreamsPage | typeof TargetsPage, path:
   const store = useConsoleStore(pinia)
   store.config = structuredClone(config)
   store.initialState = 'ready'
+  store.selectedUpstreamId = config.upstreams[0]?.id ?? ''
+  store.selectedTargetId = config.targets[0]?.id ?? ''
   await router.push(path)
   await router.isReady()
   return { ...render(page, { global: { plugins: [pinia, router] } }), router, store }

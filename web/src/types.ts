@@ -25,8 +25,46 @@ export interface UpstreamConfig {
   name: string
   type: UpstreamPlatformType
   base_url: string
+  keys?: UpstreamKey[]
   user_id?: number
+  discovery_mode?: string
+  effective_discovery_mode?: string
+  mode_status?: string
+  mode_error_code?: string
+  manage_tokens?: boolean
   sync_mappings?: unknown[]
+}
+
+export interface UpstreamKey {
+  id: string
+  name: string
+  enabled: boolean
+  models: string[]
+  credential_present: boolean
+  fingerprint?: string
+}
+
+export interface UpstreamKeyCreateInput {
+  id: string
+  name: string
+  api_key: string
+  enabled: boolean
+  models: string[]
+}
+
+export interface UpstreamKeyUpdateInput {
+  name?: string
+  api_key?: string
+  enabled?: boolean
+  models?: string[]
+}
+
+export interface ConnectionTestResult {
+  reachable: boolean
+  authenticated: boolean
+  authorized: boolean
+  resource_count: number
+  capabilities: Record<string, boolean | number | string>
 }
 
 export interface SanitizedConfig {
