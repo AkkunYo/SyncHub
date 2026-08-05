@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM node:20.19.0-alpine3.21 AS web-builder
+FROM node:22.22.2-alpine3.23 AS web-builder
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci

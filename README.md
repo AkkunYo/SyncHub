@@ -63,7 +63,7 @@ The default listener is `127.0.0.1:8888`. Windows users can start `sync-hub.exe`
 
 ## Build from source
 
-Building from source requires Go 1.24+, Node.js 20.19+, and npm:
+Building from source requires Go 1.24+, Node.js 22.22.2+ (or another version allowed by `web/package.json`), and npm:
 
 ```bash
 make build

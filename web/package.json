@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
+  },
   "scripts": {
     "postinstall": "node -e \"require('node:fs').writeFileSync('node_modules/go.mod', 'module synchub.local/frontend-dependencies\\n\\ngo 1.24.0\\n')\"",
     "dev": "vite --host 127.0.0.1",
