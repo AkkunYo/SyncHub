@@ -96,6 +96,11 @@ const channels: Channel[] = [
   },
 ]
 
+const routerLinkStub = {
+  props: ['to'],
+  template: '<a :href="to"><slot /></a>',
+}
+
 function setupStore(config: SanitizedConfig = configured) {
   const pinia = createPinia()
   setActivePinia(pinia)
@@ -117,7 +122,9 @@ describe('workspace page information architecture', () => {
 
   it('turns the empty matrix into a short first-sync checklist', () => {
     const { pinia } = setupStore({ ...configured, targets: [], upstreams: [] })
-    render(MatrixPage, { global: { plugins: [pinia] } })
+    render(MatrixPage, {
+      global: { plugins: [pinia], stubs: { RouterLink: routerLinkStub } },
+    })
 
     expect(screen.getByRole('heading', { name: '资产矩阵' })).toHaveTextContent('同步工作台')
     const checklist = screen.getByRole('list', { name: '首次同步步骤' })
@@ -126,6 +133,19 @@ describe('workspace page information architecture', () => {
     expect(checklist).toHaveTextContent('配置上游连接')
     expect(checklist).toHaveTextContent('刷新来源资产')
     expect(checklist).toHaveTextContent('选择资产并同步')
+    expect(screen.getByRole('link', { name: '配置目标实例' })).toHaveAttribute('href', '/targets')
+    expect(screen.getByRole('link', { name: '配置上游连接' })).toHaveAttribute('href', '/upstreams')
+    expect(screen.queryByRole('button', { name: '前往设置' })).not.toBeInTheDocument()
+  })
+
+  it('routes missing channel prerequisites to target management', () => {
+    const { pinia } = setupStore({ ...configured, targets: [] })
+    render(ChannelsPage, {
+      global: { plugins: [pinia], stubs: { RouterLink: routerLinkStub } },
+    })
+
+    expect(screen.getByRole('heading', { name: '尚未配置目标实例' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '管理目标实例' })).toHaveAttribute('href', '/targets')
   })
 
   it('summarizes managed and native target channels without changing table semantics', () => {
@@ -150,6 +170,23 @@ describe('workspace page information architecture', () => {
     expect(screen.getByRole('button', { name: '校验全部目标' })).toBeEnabled()
   })
 
+  it('routes missing drift prerequisites to their owning connection pages', () => {
+    const upstreamSetup = setupStore({ ...configured, upstreams: [] })
+    const upstreamView = render(DriftPage, {
+      global: { plugins: [upstreamSetup.pinia], stubs: { RouterLink: routerLinkStub } },
+    })
+
+    expect(screen.getByRole('link', { name: '管理上游连接' })).toHaveAttribute('href', '/upstreams')
+    upstreamView.unmount()
+
+    const targetSetup = setupStore({ ...configured, targets: [] })
+    render(DriftPage, {
+      global: { plugins: [targetSetup.pinia], stubs: { RouterLink: routerLinkStub } },
+    })
+
+    expect(screen.getByRole('link', { name: '管理目标实例' })).toHaveAttribute('href', '/targets')
+  })
+
   it('uses an honest empty task table with type and status columns', () => {
     render(TasksPage, {
       props: { loading: false },
@@ -164,13 +201,20 @@ describe('workspace page information architecture', () => {
     expect(within(table).getByText('暂无任务记录')).toBeInTheDocument()
   })
 
-  it('keeps settings categories in unframed configuration sections', () => {
+  it('keeps system settings limited to runtime parameters', () => {
     const { pinia } = setupStore()
     render(SettingsPage, { global: { plugins: [pinia] } })
 
     expect(screen.getByRole('heading', { name: '设置' })).toHaveTextContent('系统设置')
-    expect(screen.getByRole('tablist', { name: '设置分类' })).toBeInTheDocument()
-    expect(screen.getByRole('region', { name: '实例与连接配置' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '运行参数' })).toBeInTheDocument()
+    expect(screen.getByLabelText('监听地址')).toHaveValue('127.0.0.1')
+    expect(screen.getByLabelText('端口')).toHaveValue(8888)
+    expect(screen.getByLabelText('校验间隔')).toHaveValue('5m0s')
+    expect(screen.getByLabelText('请求超时')).toHaveValue('15s')
+    expect(screen.getByLabelText('同步并发')).toHaveValue(4)
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '添加目标实例' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '添加上游实例' })).not.toBeInTheDocument()
   })
 })
 
@@ -204,5 +248,12 @@ describe('workspace page responsive layout contracts', () => {
     const settingsPage = pageSources[4]
     expect(settingsPage).toMatch(/\.settings-band\s*\{[^}]*border:\s*0;/s)
     expect(settingsPage).toMatch(/\.settings-band\s*\{[^}]*box-shadow:\s*none;/s)
+  })
+
+  it('keeps connection CRUD and dialogs out of system settings', () => {
+    const settingsPage = pageSources[4]
+    expect(settingsPage).not.toContain('ModalDialog')
+    expect(settingsPage).not.toContain('settings-instances')
+    expect(settingsPage).not.toMatch(/api\.(create|update|delete)(Target|Upstream)/)
   })
 })
