@@ -12,6 +12,8 @@ import (
 	"github.com/AkkunYo/SyncHub/internal/config"
 	"github.com/AkkunYo/SyncHub/internal/discovery"
 	"github.com/AkkunYo/SyncHub/internal/mapping"
+	"github.com/AkkunYo/SyncHub/internal/modelcatalog"
+	"github.com/AkkunYo/SyncHub/internal/probe"
 	"github.com/AkkunYo/SyncHub/internal/reconcile"
 )
 
@@ -58,6 +60,7 @@ func New(options Options) (_ *Application, resultErr error) {
 	reconcileService := reconcile.NewService(mappings)
 	resolver := NewAdapterResolver(store, options.HTTPClient)
 	syncService := NewSyncService(mappings)
+	modelService := modelcatalog.NewService(store, options.HTTPClient, probe.NewService(options.HTTPClient))
 	runtimeState := options.Runtime
 	if runtimeState == nil {
 		runtimeState = api.NewRuntime()
@@ -80,7 +83,7 @@ func New(options Options) (_ *Application, resultErr error) {
 	application := &Application{
 		deps: api.Dependencies{
 			Config: store, Adapters: resolver, Discovery: discoveryService,
-			Sync: syncService, Mappings: mappings, Reconcile: reconcileService,
+			Sync: syncService, Mappings: mappings, Reconcile: reconcileService, Models: modelService,
 			Version: strings.TrimSpace(options.Version), BuildDate: strings.TrimSpace(options.BuildDate), RequestIDGenerator: options.RequestIDGenerator,
 		},
 		runtime: runtimeState,

@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/AkkunYo/SyncHub/internal/mapping"
+	"github.com/AkkunYo/SyncHub/internal/modelcatalog"
 	"github.com/AkkunYo/SyncHub/internal/platform"
 	"github.com/AkkunYo/SyncHub/internal/platform/cliproxyapi"
 	"github.com/AkkunYo/SyncHub/internal/platform/newapi"
@@ -14,22 +17,28 @@ import (
 )
 
 var safeErrorMessages = map[string]string{
-	"invalid_request":        "请求参数无效",
-	"target_not_found":       "目标实例不存在",
-	"upstream_not_found":     "上游实例不存在",
-	"asset_not_found":        "资产不存在",
-	"channel_not_found":      "目标渠道不存在",
-	"resource_in_use":        "资源仍有关联映射",
-	"incompatible_target":    "目标与资产不兼容",
-	"needs_reconcile":        "远端状态需要重新校验",
-	"secret_unavailable":     "资产秘密不可用",
-	"upstream_failure":       "平台请求失败",
-	"upstream_timeout":       "平台请求超时",
-	"internal_error":         "内部错误",
-	"group_required":         "必须选择上游分组",
-	"group_unknown":          "上游分组不可用",
-	"unsupported_capability": "当前资源不支持此操作",
-	"resource_conflict":      "资源已存在",
+	"invalid_request":             "请求参数无效",
+	"target_not_found":            "目标实例不存在",
+	"upstream_not_found":          "上游实例不存在",
+	"asset_not_found":             "资产不存在",
+	"channel_not_found":           "目标渠道不存在",
+	"resource_in_use":             "资源仍有关联映射",
+	"incompatible_target":         "目标与资产不兼容",
+	"needs_reconcile":             "远端状态需要重新校验",
+	"secret_unavailable":          "资产秘密不可用",
+	"upstream_failure":            "平台请求失败",
+	"upstream_timeout":            "平台请求超时",
+	"internal_error":              "内部错误",
+	"group_required":              "必须选择上游分组",
+	"group_unknown":               "上游分组不可用",
+	"unsupported_capability":      "当前资源不支持此操作",
+	"resource_conflict":           "资源已存在",
+	"operation_in_progress":       "当前资源已有操作正在执行",
+	"model_unavailable":           "当前 Key 不包含该模型",
+	"model_discovery_unsupported": "当前端点不支持模型发现",
+	"upstream_unauthenticated":    "上游凭证无效或已过期",
+	"insufficient_privilege":      "上游凭证权限不足",
+	"rate_limited":                "请求受到限流",
 }
 
 type errorDescriptor struct {
@@ -45,6 +54,14 @@ var (
 
 func respondDependencyError(c *gin.Context, err error, fallback errorDescriptor) {
 	descriptor := classifyError(err, fallback)
+	if descriptor.status == http.StatusTooManyRequests {
+		seconds := int64(1)
+		var rateLimit *platform.RateLimitError
+		if errors.As(err, &rateLimit) && rateLimit.RetryAfter > 0 {
+			seconds = int64((rateLimit.RetryAfter + time.Second - 1) / time.Second)
+		}
+		c.Header("Retry-After", strconv.FormatInt(seconds, 10))
+	}
 	writeFailure(c, descriptor.status, descriptor.code)
 }
 
@@ -75,6 +92,22 @@ func classifyError(err error, fallback errorDescriptor) errorDescriptor {
 		return errorDescriptor{status: http.StatusUnprocessableEntity, code: "secret_unavailable"}
 	case errors.Is(err, ErrUpstreamFailure):
 		return upstreamFailure
+	case errors.Is(err, modelcatalog.ErrInvalidRequest):
+		return invalidRequestError
+	case errors.Is(err, modelcatalog.ErrKeyNotFound):
+		return errorDescriptor{status: http.StatusNotFound, code: "asset_not_found"}
+	case errors.Is(err, modelcatalog.ErrModelUnavailable):
+		return errorDescriptor{status: http.StatusUnprocessableEntity, code: "model_unavailable"}
+	case errors.Is(err, modelcatalog.ErrOperationInProgress):
+		return errorDescriptor{status: http.StatusConflict, code: "operation_in_progress"}
+	case errors.Is(err, modelcatalog.ErrUnsupported):
+		return errorDescriptor{status: http.StatusUnprocessableEntity, code: "model_discovery_unsupported"}
+	case errors.Is(err, newapi.ErrUnauthenticated):
+		return errorDescriptor{status: http.StatusUnauthorized, code: "upstream_unauthenticated"}
+	case errors.Is(err, newapi.ErrInsufficientPrivilege):
+		return errorDescriptor{status: http.StatusForbidden, code: "insufficient_privilege"}
+	case errors.Is(err, platform.ErrRateLimited):
+		return errorDescriptor{status: http.StatusTooManyRequests, code: "rate_limited"}
 	default:
 		return fallback
 	}

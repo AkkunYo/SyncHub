@@ -193,12 +193,14 @@ func (s *server) createUpstream(c *gin.Context) {
 		writeFailure(c, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	if err := s.deps.Config.Update(c.Request.Context(), func(cfg *config.Config) error {
-		if _, ok := findUpstream(cfg, upstream.ID); ok {
-			return errInvalidInput
-		}
-		cfg.Upstreams = append(cfg.Upstreams, upstream)
-		return nil
+	if err := s.models.MutateUpstream(c.Request.Context(), upstream.ID, func() error {
+		return s.deps.Config.Update(c.Request.Context(), func(cfg *config.Config) error {
+			if _, ok := findUpstream(cfg, upstream.ID); ok {
+				return errInvalidInput
+			}
+			cfg.Upstreams = append(cfg.Upstreams, upstream)
+			return nil
+		})
 	}); err != nil {
 		respondDependencyError(c, err, invalidRequestError)
 		return
@@ -231,25 +233,27 @@ func (s *server) updateUpstream(c *gin.Context) {
 		return
 	}
 	var updated config.UpstreamConfig
-	err = s.deps.Config.Update(c.Request.Context(), func(cfg *config.Config) error {
-		index, ok := findUpstream(cfg, upstreamID)
-		if !ok {
-			return errMutationNotFound
-		}
-		upstream := &cfg.Upstreams[index]
-		if err := applyUpstreamCredentials(upstream, request.AccessToken, request.ManagementKey, request.APIKey, request.ProxyAPIKey); err != nil {
-			return err
-		}
-		if err := applyUpstreamUserID(upstream, request.UserID); err != nil {
-			return err
-		}
-		if err := applyUpstreamDiscoverySettings(upstream, request.DiscoveryMode, request.ManageTokens); err != nil {
-			return err
-		}
-		upstream.Name = name
-		upstream.BaseURL = baseURL
-		updated = *upstream
-		return nil
+	err = s.models.MutateUpstream(c.Request.Context(), upstreamID, func() error {
+		return s.deps.Config.Update(c.Request.Context(), func(cfg *config.Config) error {
+			index, ok := findUpstream(cfg, upstreamID)
+			if !ok {
+				return errMutationNotFound
+			}
+			upstream := &cfg.Upstreams[index]
+			if err := applyUpstreamCredentials(upstream, request.AccessToken, request.ManagementKey, request.APIKey, request.ProxyAPIKey); err != nil {
+				return err
+			}
+			if err := applyUpstreamUserID(upstream, request.UserID); err != nil {
+				return err
+			}
+			if err := applyUpstreamDiscoverySettings(upstream, request.DiscoveryMode, request.ManageTokens); err != nil {
+				return err
+			}
+			upstream.Name = name
+			upstream.BaseURL = baseURL
+			updated = *upstream
+			return nil
+		})
 	})
 	if errors.Is(err, errMutationNotFound) {
 		writeFailure(c, http.StatusNotFound, "upstream_not_found")
@@ -268,16 +272,18 @@ func (s *server) deleteUpstream(c *gin.Context) {
 		writeFailure(c, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	err := s.deps.Config.Update(c.Request.Context(), func(cfg *config.Config) error {
-		index, ok := findUpstream(cfg, upstreamID)
-		if !ok {
-			return errMutationNotFound
-		}
-		if len(cfg.Upstreams[index].SyncMappings) != 0 {
-			return ErrResourceInUse
-		}
-		cfg.Upstreams = append(cfg.Upstreams[:index], cfg.Upstreams[index+1:]...)
-		return nil
+	err := s.models.MutateUpstream(c.Request.Context(), upstreamID, func() error {
+		return s.deps.Config.Update(c.Request.Context(), func(cfg *config.Config) error {
+			index, ok := findUpstream(cfg, upstreamID)
+			if !ok {
+				return errMutationNotFound
+			}
+			if len(cfg.Upstreams[index].SyncMappings) != 0 {
+				return ErrResourceInUse
+			}
+			cfg.Upstreams = append(cfg.Upstreams[:index], cfg.Upstreams[index+1:]...)
+			return nil
+		})
 	})
 	switch {
 	case errors.Is(err, errMutationNotFound):

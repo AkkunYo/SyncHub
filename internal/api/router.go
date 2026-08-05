@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/AkkunYo/SyncHub/internal/modelcatalog"
 	"github.com/gin-gonic/gin"
 )
 
@@ -34,6 +35,7 @@ type pendingReconcile struct {
 type server struct {
 	deps    Dependencies
 	runtime *Runtime
+	models  modelcatalog.Catalog
 
 	locksMu sync.Mutex
 	locks   map[runtimeKey]*tupleLock
@@ -74,10 +76,15 @@ func NewRouterWithRuntime(deps Dependencies, runtimeState *Runtime) (*gin.Engine
 	if runtimeState == nil {
 		runtimeState = NewRuntime()
 	}
+	models := deps.Models
+	if isNilDependency(models) {
+		models = modelcatalog.NewService(deps.Config, nil, nil)
+	}
 
 	s := &server{
 		deps:    deps,
 		runtime: runtimeState,
+		models:  models,
 		locks:   make(map[runtimeKey]*tupleLock),
 	}
 	engine := gin.New()
@@ -106,6 +113,9 @@ func NewRouterWithRuntime(deps Dependencies, runtimeState *Runtime) (*gin.Engine
 		v1.POST("/upstreams/:upstream_id/keys", s.createUpstreamKey)
 		v1.PATCH("/upstreams/:upstream_id/keys/:key_id", s.updateUpstreamKey)
 		v1.DELETE("/upstreams/:upstream_id/keys/:key_id", s.deleteUpstreamKey)
+		v1.POST("/upstreams/:upstream_id/model-discoveries", s.discoverUpstreamModels)
+		v1.GET("/upstreams/:upstream_id/keys/:key_id/models", s.listUpstreamKeyModels)
+		v1.POST("/upstreams/:upstream_id/keys/:key_id/model-probes", s.probeUpstreamKeyModel)
 
 		v1.GET("/targets/:target_id/channels", s.listChannels)
 		v1.PUT("/targets/:target_id/channels/:channel_id", s.updateChannel)

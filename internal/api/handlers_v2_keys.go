@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/AkkunYo/SyncHub/internal/config"
+	"github.com/AkkunYo/SyncHub/internal/platform"
 	"github.com/gin-gonic/gin"
 )
 
@@ -19,13 +20,19 @@ func (s *server) listUpstreamKeys(c *gin.Context) {
 		writeFailure(c, http.StatusNotFound, "upstream_not_found")
 		return
 	}
-	if upstream.Type != "generic" {
-		writeFailure(c, http.StatusUnprocessableEntity, "unsupported_capability")
-		return
+	var adapter platform.UpstreamAdapter
+	if upstream.Type == "newapi" {
+		var err error
+		adapter, err = s.deps.Adapters.ResolveUpstream(c.Request.Context(), upstream)
+		if err != nil {
+			respondDependencyError(c, err, upstreamFailure)
+			return
+		}
 	}
-	keys := make([]publicUpstreamKey, len(upstream.Keys))
-	for i, key := range upstream.Keys {
-		keys[i] = redactUpstreamKey(key)
+	keys, err := s.models.ListKeys(c.Request.Context(), upstream, adapter)
+	if err != nil {
+		respondDependencyError(c, err, upstreamFailure)
+		return
 	}
 	writeSuccess(c, http.StatusOK, gin.H{"keys": keys})
 }
@@ -46,20 +53,22 @@ func (s *server) createUpstreamKey(c *gin.Context) {
 		return
 	}
 	upstreamID := c.Param("upstream_id")
-	err = s.deps.Config.Update(c.Request.Context(), func(cfg *config.Config) error {
-		upstreamIndex, ok := findUpstream(cfg, upstreamID)
-		if !ok {
-			return errMutationNotFound
-		}
-		upstream := &cfg.Upstreams[upstreamIndex]
-		if upstream.Type != "generic" {
-			return errUnsupportedMutation
-		}
-		if _, ok := findGenericKey(upstream, key.ID); ok {
-			return errDuplicateMutation
-		}
-		upstream.Keys = append(upstream.Keys, key)
-		return nil
+	err = s.models.MutateKey(c.Request.Context(), upstreamID, key.ID, func() error {
+		return s.deps.Config.Update(c.Request.Context(), func(cfg *config.Config) error {
+			upstreamIndex, ok := findUpstream(cfg, upstreamID)
+			if !ok {
+				return errMutationNotFound
+			}
+			upstream := &cfg.Upstreams[upstreamIndex]
+			if upstream.Type != "generic" {
+				return errUnsupportedMutation
+			}
+			if _, ok := findGenericKey(upstream, key.ID); ok {
+				return errDuplicateMutation
+			}
+			upstream.Keys = append(upstream.Keys, key)
+			return nil
+		})
 	})
 	if writeKeyMutationError(c, err) {
 		return
@@ -93,35 +102,37 @@ func (s *server) updateUpstreamKey(c *gin.Context) {
 	}
 	upstreamID, keyID := c.Param("upstream_id"), c.Param("key_id")
 	var updated config.GenericKeyConfig
-	err = s.deps.Config.Update(c.Request.Context(), func(cfg *config.Config) error {
-		upstreamIndex, ok := findUpstream(cfg, upstreamID)
-		if !ok {
-			return errMutationNotFound
-		}
-		upstream := &cfg.Upstreams[upstreamIndex]
-		if upstream.Type != "generic" {
-			return errUnsupportedMutation
-		}
-		keyIndex, ok := findGenericKey(upstream, keyID)
-		if !ok {
-			return errMutationNotFound
-		}
-		key := &upstream.Keys[keyIndex]
-		if request.Name.set {
-			key.Name = strings.TrimSpace(request.Name.value)
-		}
-		if request.APIKey.set {
-			key.APIKey = request.APIKey.value
-		}
-		if request.Enabled.set {
-			key.Enabled = request.Enabled.value
-		}
-		if request.Models.set {
-			key.Models = models
-		}
-		updated = *key
-		updated.Models = append([]string(nil), key.Models...)
-		return nil
+	err = s.models.MutateKey(c.Request.Context(), upstreamID, keyID, func() error {
+		return s.deps.Config.Update(c.Request.Context(), func(cfg *config.Config) error {
+			upstreamIndex, ok := findUpstream(cfg, upstreamID)
+			if !ok {
+				return errMutationNotFound
+			}
+			upstream := &cfg.Upstreams[upstreamIndex]
+			if upstream.Type != "generic" {
+				return errUnsupportedMutation
+			}
+			keyIndex, ok := findGenericKey(upstream, keyID)
+			if !ok {
+				return errMutationNotFound
+			}
+			key := &upstream.Keys[keyIndex]
+			if request.Name.set {
+				key.Name = strings.TrimSpace(request.Name.value)
+			}
+			if request.APIKey.set {
+				key.APIKey = request.APIKey.value
+			}
+			if request.Enabled.set {
+				key.Enabled = request.Enabled.value
+			}
+			if request.Models.set {
+				key.Models = models
+			}
+			updated = *key
+			updated.Models = append([]string(nil), key.Models...)
+			return nil
+		})
 	})
 	if writeKeyMutationError(c, err) {
 		return
@@ -135,29 +146,31 @@ func (s *server) deleteUpstreamKey(c *gin.Context) {
 		return
 	}
 	upstreamID, keyID := c.Param("upstream_id"), c.Param("key_id")
-	err := s.deps.Config.Update(c.Request.Context(), func(cfg *config.Config) error {
-		upstreamIndex, ok := findUpstream(cfg, upstreamID)
-		if !ok {
-			return errMutationNotFound
-		}
-		upstream := &cfg.Upstreams[upstreamIndex]
-		if upstream.Type != "generic" {
-			return errUnsupportedMutation
-		}
-		keyIndex, ok := findGenericKey(upstream, keyID)
-		if !ok {
-			return errMutationNotFound
-		}
-		assetID := upstream.ID + ":key:" + keyID
-		legacyAssetID := upstream.ID + ":endpoint"
-		for _, mapping := range upstream.SyncMappings {
-			if mapping.UpstreamAssetID == assetID || (keyID == config.DefaultGenericKeyID && mapping.UpstreamAssetID == legacyAssetID) ||
-				(len(upstream.Keys) == 1 && mapping.UpstreamAssetID == legacyAssetID) {
-				return ErrResourceInUse
+	err := s.models.MutateKey(c.Request.Context(), upstreamID, keyID, func() error {
+		return s.deps.Config.Update(c.Request.Context(), func(cfg *config.Config) error {
+			upstreamIndex, ok := findUpstream(cfg, upstreamID)
+			if !ok {
+				return errMutationNotFound
 			}
-		}
-		upstream.Keys = append(upstream.Keys[:keyIndex], upstream.Keys[keyIndex+1:]...)
-		return nil
+			upstream := &cfg.Upstreams[upstreamIndex]
+			if upstream.Type != "generic" {
+				return errUnsupportedMutation
+			}
+			keyIndex, ok := findGenericKey(upstream, keyID)
+			if !ok {
+				return errMutationNotFound
+			}
+			assetID := upstream.ID + ":key:" + keyID
+			legacyAssetID := upstream.ID + ":endpoint"
+			for _, mapping := range upstream.SyncMappings {
+				if mapping.UpstreamAssetID == assetID || (keyID == config.DefaultGenericKeyID && mapping.UpstreamAssetID == legacyAssetID) ||
+					(len(upstream.Keys) == 1 && mapping.UpstreamAssetID == legacyAssetID) {
+					return ErrResourceInUse
+				}
+			}
+			upstream.Keys = append(upstream.Keys[:keyIndex], upstream.Keys[keyIndex+1:]...)
+			return nil
+		})
 	})
 	if writeKeyMutationError(c, err) {
 		return

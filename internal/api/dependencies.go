@@ -6,6 +6,7 @@ import (
 
 	"github.com/AkkunYo/SyncHub/internal/config"
 	"github.com/AkkunYo/SyncHub/internal/discovery"
+	"github.com/AkkunYo/SyncHub/internal/modelcatalog"
 	"github.com/AkkunYo/SyncHub/internal/platform"
 	"github.com/AkkunYo/SyncHub/internal/reconcile"
 	syncservice "github.com/AkkunYo/SyncHub/internal/sync"
@@ -69,6 +70,7 @@ type Dependencies struct {
 	Sync      SyncService
 	Mappings  MappingRepository
 	Reconcile ReconcileService
+	Models    modelcatalog.Catalog
 
 	Version            string
 	BuildDate          string

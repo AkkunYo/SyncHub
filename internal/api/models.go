@@ -172,6 +172,15 @@ type upstreamKeyUpdateRequest struct {
 	Models  optionalStringSlice `json:"models"`
 }
 
+type modelDiscoveryRequest struct {
+	KeyIDs []string `json:"key_ids"`
+}
+
+type modelProbeRequest struct {
+	Model    string `json:"model"`
+	Protocol string `json:"protocol"`
+}
+
 type optionalStringSlice struct {
 	set   bool
 	value []string
