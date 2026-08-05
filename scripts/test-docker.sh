@@ -32,7 +32,7 @@ assert_file docker-compose.yml
 assert_file .dockerignore
 assert_file docker-entrypoint.sh
 
-assert_contains Dockerfile 'FROM node:20.19.0-alpine3.21 AS web-builder'
+assert_contains Dockerfile 'FROM node:22.22.2-alpine3.23 AS web-builder'
 assert_contains Dockerfile 'FROM golang:1.24.0-alpine3.21 AS go-builder'
 assert_contains Dockerfile 'FROM alpine:3.21'
 assert_contains Dockerfile 'USER synchub'
@@ -56,6 +56,8 @@ assert_contains docker-compose.yml 'read_only: true'
 assert_contains docker-compose.yml 'no-new-privileges:true'
 assert_contains docker-compose.yml 'healthcheck:'
 assert_contains README.md 'docker compose up -d --build'
+assert_contains README.md 'Node.js 22.22.2+'
+assert_contains web/package.json '"node": "^22.22.2 || ^24.15.0 || >=26.0.0"'
 
 compose_output=$(cd "$repo_root" && docker compose config)
 case "$compose_output" in
