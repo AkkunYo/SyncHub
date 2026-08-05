@@ -130,6 +130,18 @@ describe('SyncHub API client', () => {
     await api.createUpstream({ id: 'source-a' })
     await api.updateUpstream('source/a', { name: 'Source' })
     await api.deleteUpstream('source/a')
+    await api.testTargetConnection('target/a')
+    await api.testUpstreamConnection('source/a')
+    await api.getUpstreamKeys('source/a')
+    await api.createUpstreamKey('source/a', {
+      id: 'key/a',
+      name: 'Primary',
+      api_key: 'write-only',
+      enabled: true,
+      models: [],
+    })
+    await api.updateUpstreamKey('source/a', 'key/a', { name: 'Renamed', enabled: false })
+    await api.deleteUpstreamKey('source/a', 'key/a')
     await api.getChannels('target/a')
     await api.updateChannel('target/a', 'channel/1', {
       name: 'Channel',
@@ -157,6 +169,12 @@ describe('SyncHub API client', () => {
       'POST /api/v1/upstreams',
       'PUT /api/v1/upstreams/source%2Fa',
       'DELETE /api/v1/upstreams/source%2Fa',
+      'POST /api/v1/targets/target%2Fa/connection-tests',
+      'POST /api/v1/upstreams/source%2Fa/connection-tests',
+      'GET /api/v1/upstreams/source%2Fa/keys',
+      'POST /api/v1/upstreams/source%2Fa/keys',
+      'PATCH /api/v1/upstreams/source%2Fa/keys/key%2Fa',
+      'DELETE /api/v1/upstreams/source%2Fa/keys/key%2Fa',
       'GET /api/v1/targets/target%2Fa/channels',
       'PUT /api/v1/targets/target%2Fa/channels/channel%2F1',
       'DELETE /api/v1/targets/target%2Fa/channels/channel%2F1',
