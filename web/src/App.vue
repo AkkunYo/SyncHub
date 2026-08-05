@@ -10,6 +10,7 @@ import {
   PanelLeftClose,
   Server,
   Settings,
+  X,
 } from 'lucide-vue-next'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 
@@ -23,6 +24,7 @@ const router = useRouter()
 const mobileNavOpen = ref(false)
 const mobileMenuButton = ref<HTMLButtonElement | null>(null)
 const mobileNav = ref<HTMLElement | null>(null)
+const mobileCloseButton = ref<HTMLButtonElement | null>(null)
 const mainContent = ref<HTMLElement | null>(null)
 
 const navItems = [
@@ -50,15 +52,9 @@ function formattedBuildDate(value: string): string {
   return match ? `${match[1]} ${match[2]}` : value
 }
 
-function focusActiveMobileNavItem(): void {
-  const activeItem = mobileNav.value?.querySelector<HTMLElement>('[aria-current="page"]')
-  const firstItem = mobileNav.value?.querySelector<HTMLElement>('a[href], button:not([disabled])')
-  ;(activeItem ?? firstItem)?.focus()
-}
-
 function openMobileNav(): void {
   mobileNavOpen.value = true
-  void nextTick(focusActiveMobileNavItem)
+  void nextTick(() => mobileCloseButton.value?.focus())
 }
 
 function closeMobileNav(focusTarget: 'trigger' | 'content' = 'trigger'): void {
@@ -125,6 +121,10 @@ watch(
   },
 )
 
+watch(mobileNavOpen, (isOpen) => {
+  document.body.classList.toggle('nav-open', isOpen)
+})
+
 watch(
   () => [route.meta.legacyView, route.params.id, store.initialState] as const,
   ([legacyView, routeTargetId, initialState]) => {
@@ -148,6 +148,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   document.removeEventListener('keydown', onKeydown)
+  document.body.classList.remove('nav-open')
 })
 </script>
 
@@ -189,20 +190,21 @@ onUnmounted(() => {
         <Menu v-else :size="19" aria-hidden="true" />
       </button>
 
-      <div class="topbar-brand">
+      <RouterLink class="topbar-brand" to="/sync" aria-label="SyncHub 首页">
         <span class="brand-mark"><GitCompareArrows :size="18" aria-hidden="true" /></span>
         <strong>SyncHub</strong>
-      </div>
+      </RouterLink>
 
       <span class="topbar-page-title">{{ pageTitle }}</span>
 
-      <div class="topbar-health" aria-label="本地管理 API" aria-live="polite">
+      <div class="topbar-health" role="status" aria-label="本地管理 API" aria-live="polite">
         <span class="health-dot" :class="healthStatusClass" aria-hidden="true"></span>
-        <span>{{ healthStatusLabel }}</span>
+        <span class="health-context">本地 API</span>
+        <strong>{{ healthStatusLabel }}</strong>
       </div>
     </header>
 
-    <aside class="desktop-sidebar">
+    <aside class="desktop-sidebar" aria-label="控制台导航">
       <p class="nav-section-label">工作区</p>
       <nav class="side-nav" aria-label="主导航">
         <RouterLink
@@ -217,16 +219,17 @@ onUnmounted(() => {
           <span v-if="item.id === 'drift' && driftCount" class="nav-count" aria-hidden="true">{{ driftCount }}</span>
         </RouterLink>
       </nav>
-      <div class="sidebar-status">
-        <span class="health-dot" :class="healthStatusClass" aria-hidden="true"></span>
-        <div>
-          <span class="status-label">运行状态</span>
-          <strong>本地管理 API</strong>
-          <small>{{ healthStatusLabel }}</small>
-          <small v-if="store.runtimeInfo">版本 {{ store.runtimeInfo.version }}</small>
-          <small v-if="store.runtimeInfo">编译 {{ formattedBuildDate(store.runtimeInfo.build_date) }}</small>
+      <footer class="sidebar-meta" aria-label="构建信息">
+        <div class="sidebar-api-state">
+          <span class="health-dot" :class="healthStatusClass" aria-hidden="true"></span>
+          <span>本地管理 API</span>
+          <strong>{{ healthStatusLabel }}</strong>
         </div>
-      </div>
+        <span>版本 {{ store.runtimeInfo?.version ?? 'unknown' }}</span>
+        <span>
+          编译 {{ store.runtimeInfo ? formattedBuildDate(store.runtimeInfo.build_date) : 'unknown' }}
+        </span>
+      </footer>
     </aside>
 
     <template v-if="mobileNavOpen">
@@ -237,38 +240,58 @@ onUnmounted(() => {
         aria-label="关闭导航"
         @click="closeMobileNav()"
       ></button>
-      <nav
+      <aside
         id="mobile-primary-navigation"
         ref="mobileNav"
-        class="mobile-nav"
-        aria-label="移动端主导航"
-        data-open="true"
+        class="mobile-drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-label="控制台导航"
         tabindex="-1"
       >
-        <p class="nav-section-label">工作区</p>
-        <RouterLink
-          v-for="item in navItems"
-          :key="item.id"
-          :to="item.to"
-          :class="{ active: activeNavigationId === item.id }"
-          :aria-current="activeNavigationId === item.id ? 'page' : undefined"
-          @click="closeMobileNavAfterNavigation"
-        >
-          <component :is="item.icon" :size="18" aria-hidden="true" />
-          <span>{{ item.label }}</span>
-          <span v-if="item.id === 'drift' && driftCount" class="nav-count" aria-hidden="true">{{ driftCount }}</span>
-        </RouterLink>
-        <div class="sidebar-status">
-          <span class="health-dot" :class="healthStatusClass" aria-hidden="true"></span>
-          <div>
-            <span class="status-label">运行状态</span>
-            <strong>本地管理 API</strong>
-            <small>{{ healthStatusLabel }}</small>
-            <small v-if="store.runtimeInfo">版本 {{ store.runtimeInfo.version }}</small>
-            <small v-if="store.runtimeInfo">编译 {{ formattedBuildDate(store.runtimeInfo.build_date) }}</small>
+        <header class="mobile-drawer-header">
+          <div class="drawer-brand" aria-hidden="true">
+            <span class="brand-mark"><GitCompareArrows :size="18" /></span>
+            <strong>SyncHub</strong>
           </div>
-        </div>
-      </nav>
+          <button
+            ref="mobileCloseButton"
+            class="icon-button drawer-close-button"
+            type="button"
+            aria-label="关闭导航"
+            title="关闭导航"
+            @click="closeMobileNav()"
+          >
+            <X :size="19" aria-hidden="true" />
+          </button>
+        </header>
+        <nav class="mobile-nav" aria-label="移动端主导航" data-open="true">
+          <p class="nav-section-label">工作区</p>
+          <RouterLink
+            v-for="item in navItems"
+            :key="item.id"
+            :to="item.to"
+            :class="{ active: activeNavigationId === item.id }"
+            :aria-current="activeNavigationId === item.id ? 'page' : undefined"
+            @click="closeMobileNavAfterNavigation"
+          >
+            <component :is="item.icon" :size="18" aria-hidden="true" />
+            <span>{{ item.label }}</span>
+            <span v-if="item.id === 'drift' && driftCount" class="nav-count" aria-hidden="true">{{ driftCount }}</span>
+          </RouterLink>
+        </nav>
+        <footer class="sidebar-meta" aria-label="构建信息">
+          <div class="sidebar-api-state">
+            <span class="health-dot" :class="healthStatusClass" aria-hidden="true"></span>
+            <span>本地管理 API</span>
+            <strong>{{ healthStatusLabel }}</strong>
+          </div>
+          <span>版本 {{ store.runtimeInfo?.version ?? 'unknown' }}</span>
+          <span>
+            编译 {{ store.runtimeInfo ? formattedBuildDate(store.runtimeInfo.build_date) : 'unknown' }}
+          </span>
+        </footer>
+      </aside>
     </template>
 
     <main id="main-content" ref="mainContent" class="app-main" tabindex="-1">
