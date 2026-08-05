@@ -6,7 +6,7 @@ test('connection pages expose direct search and side-panel creation flows', asyn
 
   await expect(page.getByRole('heading', { name: '上游连接', exact: true })).toBeVisible()
   await expect(page.getByRole('searchbox', { name: '搜索上游连接' })).toBeVisible()
-  await page.getByRole('button', { name: '添加上游连接' }).click()
+  await page.locator('.connections-header').getByRole('button', { name: '添加上游连接' }).click()
 
   const upstreamPanel = page.getByRole('dialog', { name: '添加上游连接' })
   await expect(upstreamPanel).toBeVisible()
@@ -17,7 +17,7 @@ test('connection pages expose direct search and side-panel creation flows', asyn
   await page.getByRole('link', { name: '目标实例', exact: true }).click()
   await expect(page.getByRole('heading', { name: '目标实例', exact: true })).toBeVisible()
   await expect(page.getByRole('searchbox', { name: '搜索目标实例' })).toBeVisible()
-  await page.getByRole('button', { name: '添加目标实例' }).click()
+  await page.locator('.connections-header').getByRole('button', { name: '添加目标实例' }).click()
 
   const targetPanel = page.getByRole('dialog', { name: '添加目标实例' })
   await expect(targetPanel).toBeVisible()
@@ -83,8 +83,9 @@ test('redesigned shell remains dense and overflow-free across desktop and mobile
       expect(metrics.sidebarWidth).toBeGreaterThanOrEqual(208)
       expect(metrics.sidebarWidth).toBeLessThanOrEqual(224)
       expect(metrics.mainLeft).toBe(metrics.sidebarWidth)
-      await expect(page.locator('.desktop-sidebar').getByText(/^版本 /)).toBeVisible()
-      await expect(page.locator('.desktop-sidebar').getByText(/^编译 /)).toBeVisible()
+      const buildInfo = page.locator('.desktop-sidebar [aria-label="构建信息"]')
+      await expect(buildInfo).toContainText(/版本\s+\S+/)
+      await expect(buildInfo).toContainText(/编译\s+\S+/)
       continue
     }
 
