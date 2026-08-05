@@ -9,6 +9,7 @@ import {
 import ChannelsPage from '@/pages/ChannelsPage.vue'
 import DriftPage from '@/pages/DriftPage.vue'
 import MatrixPage from '@/pages/MatrixPage.vue'
+import ResourceDetailPage from '@/pages/ResourceDetailPage.vue'
 import SettingsPage from '@/pages/SettingsPage.vue'
 import TargetsPage from '@/pages/TargetsPage.vue'
 import TasksPage from '@/pages/TasksPage.vue'
@@ -40,10 +41,24 @@ export const consoleRoutes: RouteRecordRaw[] = [
     meta: { navigationId: 'upstreams', legacyView: 'settings', title: '上游连接' },
   },
   {
+    path: '/upstreams/:id',
+    name: 'upstream-detail',
+    component: ResourceDetailPage,
+    props: { kind: 'upstream', title: '上游详情', backTo: '/upstreams', backLabel: '返回上游连接' },
+    meta: { navigationId: 'upstreams', legacyView: 'settings', title: '上游详情' },
+  },
+  {
     path: '/targets',
     name: 'targets',
     component: TargetsPage,
     meta: { navigationId: 'targets', legacyView: 'settings', title: '目标实例' },
+  },
+  {
+    path: '/targets/:id',
+    name: 'target-detail',
+    component: ResourceDetailPage,
+    props: { kind: 'target', title: '目标概览', backTo: '/targets', backLabel: '返回目标实例' },
+    meta: { navigationId: 'targets', legacyView: 'settings', title: '目标概览' },
   },
   {
     path: '/targets/:id/channels',
@@ -58,11 +73,25 @@ export const consoleRoutes: RouteRecordRaw[] = [
     meta: { navigationId: 'drift', legacyView: 'drift', title: '漂移修复' },
   },
   {
+    path: '/drift/:id',
+    name: 'drift-detail',
+    component: ResourceDetailPage,
+    props: { kind: 'drift', title: '漂移详情', backTo: '/drift', backLabel: '返回漂移修复' },
+    meta: { navigationId: 'drift', legacyView: 'drift', title: '漂移详情' },
+  },
+  {
     path: '/tasks',
     name: 'tasks',
     component: TasksPage,
     props: { loading: false },
     meta: { navigationId: 'tasks', title: '任务记录' },
+  },
+  {
+    path: '/tasks/:id',
+    name: 'task-detail',
+    component: ResourceDetailPage,
+    props: { kind: 'task', title: '任务详情', backTo: '/tasks', backLabel: '返回任务记录' },
+    meta: { navigationId: 'tasks', title: '任务详情' },
   },
   {
     path: '/settings',

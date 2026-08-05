@@ -29,10 +29,10 @@ const store = useConsoleStore()
           <code>{{ target.base_url }}</code>
           <RouterLink
             class="secondary-button"
-            :to="{ name: 'target-channels', params: { id: target.id } }"
-            :aria-label="`查看 ${target.name} 渠道`"
+            :to="{ name: 'target-detail', params: { id: target.id } }"
+            :aria-label="`查看 ${target.name} 概览`"
           >
-            查看渠道
+            查看概览
           </RouterLink>
         </article>
       </div>

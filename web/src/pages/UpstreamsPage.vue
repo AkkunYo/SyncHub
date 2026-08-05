@@ -27,7 +27,13 @@ const store = useConsoleStore()
             <small>{{ upstream.id }} / {{ upstream.type }}</small>
           </div>
           <code>{{ upstream.base_url }}</code>
-          <RouterLink class="secondary-button" to="/sync">打开同步工作台</RouterLink>
+          <RouterLink
+            class="secondary-button"
+            :to="{ name: 'upstream-detail', params: { id: upstream.id } }"
+            :aria-label="`查看 ${upstream.name} 详情`"
+          >
+            查看详情
+          </RouterLink>
         </article>
       </div>
     </section>

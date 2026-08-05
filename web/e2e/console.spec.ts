@@ -36,11 +36,17 @@ async function expectNoOverlap(first: Locator, second: Locator): Promise<void> {
   expect(separated).toBe(true)
 }
 
+async function openTargetChannels(page: Page, targetName: string): Promise<void> {
+  await page.getByRole('link', { name: '目标实例', exact: true }).click()
+  await page.getByRole('link', { name: `查看 ${targetName} 概览` }).click()
+  await page.getByRole('link', { name: '查看渠道' }).click()
+}
+
 test('administrator completes the live multi-target synchronization and reconciliation journey', async ({ page, request }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
   await page.goto('/')
   await expect(page.getByRole('heading', { name: '资产矩阵' })).toBeVisible()
-  await page.getByRole('button', { name: '设置', exact: true }).click()
+  await page.getByRole('link', { name: '系统设置', exact: true }).click()
 
   await addInstance(page, '上游', {
     id: 'source-e2e',
@@ -67,7 +73,7 @@ test('administrator completes the live multi-target synchronization and reconcil
     credential: 'E2E_TARGET_B_ADMIN_TOKEN_PLACEHOLDER',
   })
 
-  await page.getByRole('button', { name: '资产矩阵' }).click()
+  await page.getByRole('link', { name: '同步工作台', exact: true }).click()
   await page.locator('.workspace-toolbar').getByRole('button', { name: '刷新资产' }).click()
   await expect(page.getByText('E2E upstream key', { exact: true })).toBeVisible()
   await page.getByRole('checkbox', { name: '选择资产 E2E upstream key' }).check()
@@ -83,7 +89,7 @@ test('administrator completes the live multi-target synchronization and reconcil
 
   const driftResponse = await request.post(`${fixtureURL}/__control/target-a/channels/101/drift`)
   expect(driftResponse.ok()).toBe(true)
-  await page.getByRole('button', { name: '配置漂移' }).click()
+  await page.getByRole('link', { name: '漂移修复', exact: true }).click()
   await page.getByRole('button', { name: '校验全部目标' }).click()
   await expect(page.getByText('100 -> 61')).toBeVisible()
   await page.getByRole('button', { name: '接受 E2E upstream key 在 E2E Target Alpha 的目标端状态' }).click()
@@ -92,11 +98,11 @@ test('administrator completes the live multi-target synchronization and reconcil
   const deleteResponse = await request.delete(`${fixtureURL}/__control/target-b/channels/201`)
   expect(deleteResponse.ok()).toBe(true)
   await page.getByRole('button', { name: '校验全部目标' }).click()
-  await page.getByRole('button', { name: '资产矩阵' }).click()
+  await page.getByRole('link', { name: '同步工作台', exact: true }).click()
   await expect(page.locator('.matrix-table .status-synced')).toHaveCount(1)
   await expect(page.locator('.matrix-table .status-unsynced')).toHaveCount(1)
 
-  await page.getByRole('button', { name: '目标渠道' }).click()
+  await openTargetChannels(page, 'E2E Target Alpha')
   await expect(page.getByText('E2E upstream key', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: '编辑渠道 E2E upstream key' }).click()
   const editDialog = page.getByRole('dialog', { name: '编辑目标渠道' })
@@ -108,13 +114,13 @@ test('administrator completes the live multi-target synchronization and reconcil
   await editDialog.getByRole('button', { name: '保存渠道' }).click()
   await expect(page.getByText('E2E managed updated', { exact: true })).toBeVisible()
 
-  await page.getByRole('button', { name: '资产矩阵' }).click()
+  await page.getByRole('link', { name: '同步工作台', exact: true }).click()
   await expect(page.locator('.matrix-table .status-synced')).toHaveCount(1)
   await expect(page.locator('.matrix-table .status-unsynced')).toHaveCount(1)
-  await page.getByRole('button', { name: '目标渠道' }).click()
+  await openTargetChannels(page, 'E2E Target Alpha')
   await page.getByRole('button', { name: '删除渠道 E2E managed updated' }).click()
   await page.getByRole('dialog', { name: '删除目标渠道' }).getByRole('button', { name: '确认删除' }).click()
-  await page.getByRole('button', { name: '资产矩阵' }).click()
+  await page.getByRole('link', { name: '同步工作台', exact: true }).click()
   await expect(page.locator('.matrix-table .status-unsynced')).toHaveCount(2)
 
   for (const { width, height } of [

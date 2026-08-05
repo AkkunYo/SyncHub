@@ -191,6 +191,18 @@ h3 {
   letter-spacing: 0;
 }
 
+.topbar-page-title {
+  min-width: 0;
+  overflow: hidden;
+  padding-left: 14px;
+  border-left: 1px solid var(--line);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .topbar-health {
   display: inline-flex;
   align-items: center;
@@ -580,6 +592,57 @@ input[type="checkbox"] {
 
 .route-empty-state svg {
   color: var(--blue);
+}
+
+.page-subtitle {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.route-detail-summary {
+  display: grid;
+  margin: 0;
+  grid-template-columns: minmax(160px, 0.7fr) minmax(120px, 0.5fr) minmax(240px, 1.4fr);
+}
+
+.route-detail-summary.is-compact {
+  grid-template-columns: 1fr;
+}
+
+.route-detail-summary > div {
+  min-width: 0;
+  padding: 14px;
+  border-right: 1px solid var(--line);
+}
+
+.route-detail-summary > div:last-child {
+  border-right: 0;
+}
+
+.route-detail-summary dt {
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.route-detail-summary dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.route-detail-summary code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.route-detail-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 14px;
+  border-top: 1px solid var(--line);
 }
 
 .workspace-toolbar {
@@ -1411,6 +1474,10 @@ input[type="checkbox"] {
     width: auto;
   }
 
+  .topbar-page-title {
+    display: none;
+  }
+
   .topbar-brand .brand-mark {
     width: 30px;
     height: 30px;
@@ -1507,6 +1574,19 @@ input[type="checkbox"] {
   .route-list-row {
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 8px 12px;
+  }
+
+  .route-detail-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .route-detail-summary > div {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .route-detail-summary > div:last-child {
+    border-bottom: 0;
   }
 
   .route-list-row code {

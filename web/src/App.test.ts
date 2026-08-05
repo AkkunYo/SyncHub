@@ -140,7 +140,8 @@ function renderApp() {
 async function openTargetChannels(user: ReturnType<typeof userEvent.setup>, targetName = 'Target Alpha') {
   const navigation = screen.getByRole('navigation', { name: '主导航' })
   await user.click(within(navigation).getByRole('link', { name: '目标实例' }))
-  await user.click(screen.getByRole('link', { name: `查看 ${targetName} 渠道` }))
+  await user.click(screen.getByRole('link', { name: `查看 ${targetName} 概览` }))
+  await user.click(screen.getByRole('link', { name: '查看渠道' }))
 }
 
 describe('SyncHub console', () => {
@@ -247,6 +248,33 @@ describe('SyncHub console', () => {
     expect(targetOverview).toHaveAttribute('href', '/targets/target-a')
     await user.click(targetOverview)
     expect(screen.getByRole('heading', { name: '目标概览' })).toBeInTheDocument()
+  })
+
+  it('keeps unknown resource URLs recoverable when configuration is empty', async () => {
+    installFetch((url) => {
+      if (url.pathname === '/api/v1/health') {
+        return envelope({ status: 'ok', version: 'v1.3.0', build_date: '2026-07-29T16:00:00+08:00' })
+      }
+      if (url.pathname === '/api/v1/config') {
+        return envelope({ ...config, targets: [], upstreams: [] })
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`)
+    })
+    const user = userEvent.setup()
+    const { router } = renderApp()
+
+    await screen.findByRole('heading', { name: '资产矩阵' })
+    await router.push('/upstreams/missing-upstream')
+    expect(window.location.pathname).toBe('/upstreams/missing-upstream')
+    expect(screen.getByRole('heading', { name: '未找到对应实例' })).toBeInTheDocument()
+    await user.click(screen.getByRole('link', { name: '返回列表' }))
+    expect(screen.getByRole('heading', { name: '尚未配置上游连接' })).toBeInTheDocument()
+
+    await router.push('/targets/missing-target')
+    expect(window.location.pathname).toBe('/targets/missing-target')
+    expect(screen.getByRole('heading', { name: '未找到对应实例' })).toBeInTheDocument()
+    await user.click(screen.getByRole('link', { name: '返回列表' }))
+    expect(screen.getByRole('heading', { name: '尚未配置目标实例' })).toBeInTheDocument()
   })
 
   it('loads the target selected by a direct channel route', async () => {

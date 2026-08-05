@@ -35,6 +35,7 @@ const navItems = [
 ]
 
 const activeNavigationId = computed(() => route.meta.navigationId as NavigationId | undefined)
+const pageTitle = computed(() => route.meta.title ?? '同步工作台')
 const driftCount = computed(() => store.driftItems.length)
 const healthStatusLabel = computed(() => {
   if (store.healthState === 'loading') return '检测中'
@@ -192,6 +193,8 @@ onUnmounted(() => {
         <span class="brand-mark"><GitCompareArrows :size="18" aria-hidden="true" /></span>
         <strong>SyncHub</strong>
       </div>
+
+      <span class="topbar-page-title">{{ pageTitle }}</span>
 
       <div class="topbar-health" aria-label="本地管理 API" aria-live="polite">
         <span class="health-dot" :class="healthStatusClass" aria-hidden="true"></span>
