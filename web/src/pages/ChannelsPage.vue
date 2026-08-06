@@ -1,7 +1,16 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
-import { ChevronDown, Pencil, RefreshCw, RotateCcw, Search, Trash2 } from 'lucide-vue-next'
-import { RouterLink } from 'vue-router'
+import { computed, inject, reactive, ref, watch } from 'vue'
+import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Pencil,
+  RefreshCw,
+  RotateCcw,
+  Search,
+  Trash2,
+} from 'lucide-vue-next'
+import { RouterLink, routeLocationKey, routerKey, type LocationQueryRaw } from 'vue-router'
 
 import { api, safeErrorMessage } from '@/api/client'
 import ModalDialog from '@/components/ModalDialog.vue'
@@ -10,14 +19,72 @@ import { useConsoleStore } from '@/stores/console'
 import type { Channel, ChannelInput } from '@/types'
 
 const store = useConsoleStore()
+const route = inject(routeLocationKey, null)
+const router = inject(routerKey, null)
+const pageSize = 10
+const fallbackPage = ref(1)
+const fallbackSearch = ref('')
+const fallbackSource = ref<'all' | 'managed' | 'native'>('all')
+const fallbackStatus = ref<'all' | 'enabled' | 'disabled'>('all')
 const editChannel = ref<Channel | null>(null)
 const deleteChannel = ref<Channel | null>(null)
 const actionError = ref('')
 const saving = ref(false)
 const deleting = ref(false)
-const searchQuery = ref('')
-const sourceFilter = ref<'all' | 'managed' | 'native'>('all')
-const statusFilter = ref<'all' | 'enabled' | 'disabled'>('all')
+function queryValue(key: string): string {
+  const value = route?.query[key]
+  return Array.isArray(value) ? value[0] ?? '' : value ?? ''
+}
+
+function updateQuery(changes: Record<string, string | undefined>): void {
+  if (!router || !route) return
+  const query: LocationQueryRaw = { ...route.query }
+  for (const [key, value] of Object.entries(changes)) {
+    if (value) query[key] = value
+    else delete query[key]
+  }
+  void router.replace({ query })
+}
+
+const searchQuery = computed({
+  get: () => route ? queryValue('q') : fallbackSearch.value,
+  set: (value: string) => {
+    if (!route) fallbackSearch.value = value
+    updateQuery({ q: value.trim() || undefined, page: undefined })
+  },
+})
+const sourceFilter = computed<'all' | 'managed' | 'native'>({
+  get: () => {
+    const value = route ? queryValue('source') : fallbackSource.value
+    return value === 'managed' || value === 'native' ? value : 'all'
+  },
+  set: (value) => {
+    if (!route) fallbackSource.value = value
+    updateQuery({ source: value === 'all' ? undefined : value, page: undefined })
+  },
+})
+const statusFilter = computed<'all' | 'enabled' | 'disabled'>({
+  get: () => {
+    const value = route ? queryValue('status') : fallbackStatus.value
+    return value === 'enabled' || value === 'disabled' ? value : 'all'
+  },
+  set: (value) => {
+    if (!route) fallbackStatus.value = value
+    updateQuery({ status: value === 'all' ? undefined : value, page: undefined })
+  },
+})
+const currentPage = computed({
+  get: () => {
+    const raw = route ? queryValue('page') : String(fallbackPage.value)
+    const page = Number.parseInt(raw, 10)
+    return Number.isFinite(page) && page > 0 ? page : 1
+  },
+  set: (value: number) => {
+    const page = Math.max(1, Math.floor(value))
+    if (!route) fallbackPage.value = page
+    updateQuery({ page: page === 1 ? undefined : String(page) })
+  },
+})
 const form = reactive<ChannelInput>({
   name: '',
   base_url: '',
@@ -48,20 +115,45 @@ const filteredChannels = computed(() => {
     return matchesQuery && matchesSource && matchesStatus
   })
 })
+const pageCount = computed(() => Math.max(1, Math.ceil(filteredChannels.value.length / pageSize)))
+const safePage = computed(() => Math.min(currentPage.value, pageCount.value))
+const visibleChannels = computed(() => {
+  const start = (safePage.value - 1) * pageSize
+  return filteredChannels.value.slice(start, start + pageSize)
+})
+const rangeStart = computed(() => (filteredChannels.value.length ? (safePage.value - 1) * pageSize + 1 : 0))
+const rangeEnd = computed(() => Math.min(safePage.value * pageSize, filteredChannels.value.length))
 const managedChannelCount = computed(() => store.channels.filter((channel) => channel.managed).length)
 const nativeChannelCount = computed(() => store.channels.length - managedChannelCount.value)
 const enabledChannelCount = computed(() => store.channels.filter((channel) => channel.enabled).length)
 const channelSummaryReady = computed(() => store.channelState === 'ready')
 
 function clearFilters(): void {
-  searchQuery.value = ''
-  sourceFilter.value = 'all'
-  statusFilter.value = 'all'
+  if (!route) {
+    fallbackSearch.value = ''
+    fallbackSource.value = 'all'
+    fallbackStatus.value = 'all'
+    fallbackPage.value = 1
+    return
+  }
+  updateQuery({ q: undefined, source: undefined, status: undefined, page: undefined })
 }
 
 function onTargetChange(event: Event): void {
-  void store.loadChannels((event.target as HTMLSelectElement).value)
+  const targetId = (event.target as HTMLSelectElement).value
+  if (router) {
+    void router.push({ name: 'target-channels', params: { id: targetId }, query: {} })
+  }
+  void store.loadChannels(targetId)
 }
+
+function goToPage(page: number): void {
+  currentPage.value = Math.max(1, Math.min(page, pageCount.value))
+}
+
+watch([pageCount, currentPage], ([count, page]) => {
+  if (page > count) currentPage.value = count
+})
 
 function openEdit(channel: Channel): void {
   editChannel.value = channel
@@ -258,7 +350,7 @@ async function confirmDelete(): Promise<void> {
 
         <template v-else>
           <p class="table-result-count" aria-live="polite">
-            显示 {{ filteredChannels.length }} / {{ store.channels.length }} 个渠道
+            显示 {{ rangeStart }}-{{ rangeEnd }} / {{ filteredChannels.length }} 个渠道
           </p>
 
           <div v-if="filteredChannels.length === 0" class="state-panel filter-empty">
@@ -282,7 +374,7 @@ async function confirmDelete(): Promise<void> {
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="channel in filteredChannels" :key="channel.id">
+                <tr v-for="channel in visibleChannels" :key="channel.id">
                   <td class="channel-cell" data-label="渠道">
                     <strong>{{ channel.name }}</strong>
                     <small>{{ channel.provider }} / #{{ channel.id }}</small>
@@ -339,6 +431,32 @@ async function confirmDelete(): Promise<void> {
               </tbody>
             </table>
           </div>
+
+          <nav v-if="filteredChannels.length" class="table-pagination" aria-label="渠道分页">
+            <span>第 {{ safePage }} / {{ pageCount }} 页</span>
+            <div>
+              <button
+                class="icon-button icon-button-small"
+                type="button"
+                aria-label="上一页"
+                title="上一页"
+                :disabled="safePage <= 1"
+                @click="goToPage(safePage - 1)"
+              >
+                <ChevronLeft :size="16" aria-hidden="true" />
+              </button>
+              <button
+                class="icon-button icon-button-small"
+                type="button"
+                aria-label="下一页"
+                title="下一页"
+                :disabled="safePage >= pageCount"
+                @click="goToPage(safePage + 1)"
+              >
+                <ChevronRight :size="16" aria-hidden="true" />
+              </button>
+            </div>
+          </nav>
         </template>
       </section>
     </template>
@@ -439,6 +557,27 @@ async function confirmDelete(): Promise<void> {
   background: var(--surface);
 }
 
+.channels-workspace :deep(input),
+.channels-workspace :deep(select) {
+  font-size: 13px;
+}
+
+.table-pagination {
+  display: flex;
+  min-height: 52px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.table-pagination > div {
+  display: flex;
+  gap: 6px;
+}
+
 .channels-table tbody tr {
   transition: background-color 120ms ease;
 }
@@ -467,8 +606,14 @@ async function confirmDelete(): Promise<void> {
 
   .channels-table tbody tr {
     display: grid;
-    border-left: 3px solid var(--line);
+    border-top: 1px solid var(--line);
+    border-left: 0;
     border-radius: 0;
+  }
+
+  .channels-workspace :deep(input),
+  .channels-workspace :deep(select) {
+    font-size: 16px;
   }
 }
 </style>
