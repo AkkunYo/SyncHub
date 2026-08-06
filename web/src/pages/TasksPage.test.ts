@@ -1,6 +1,6 @@
 import { render, screen, within } from '@testing-library/vue'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import TasksPage, { type TaskRecord } from './TasksPage.vue'
 import { api } from '@/api/client'
@@ -11,6 +11,10 @@ const routerLinkStub = {
 }
 
 describe('TasksPage workflow states', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
   it('loads task history automatically and links rows to task details', async () => {
     vi.spyOn(api, 'getTasks').mockResolvedValue({
       tasks: [{

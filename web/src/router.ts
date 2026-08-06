@@ -12,6 +12,7 @@ import MatrixPage from '@/pages/MatrixPage.vue'
 import ResourceDetailPage from '@/pages/ResourceDetailPage.vue'
 import SettingsPage from '@/pages/SettingsPage.vue'
 import TargetsPage from '@/pages/TargetsPage.vue'
+import TaskDetailPage from '@/pages/TaskDetailPage.vue'
 import TasksPage from '@/pages/TasksPage.vue'
 import UpstreamsPage from '@/pages/UpstreamsPage.vue'
 import type { ViewName } from '@/types'
@@ -83,14 +84,12 @@ export const consoleRoutes: RouteRecordRaw[] = [
     path: '/tasks',
     name: 'tasks',
     component: TasksPage,
-    props: { loading: false },
     meta: { navigationId: 'tasks', title: '任务记录' },
   },
   {
     path: '/tasks/:id',
     name: 'task-detail',
-    component: ResourceDetailPage,
-    props: { kind: 'task', title: '任务详情', backTo: '/tasks', backLabel: '返回任务记录' },
+    component: TaskDetailPage,
     meta: { navigationId: 'tasks', title: '任务详情' },
   },
   {

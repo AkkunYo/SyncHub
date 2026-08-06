@@ -1,8 +1,11 @@
 <script setup lang="ts">
+import { computed, onMounted, ref } from 'vue'
 import { CircleAlert, ListChecks, RotateCcw } from 'lucide-vue-next'
 import { RouterLink } from 'vue-router'
 
+import { api, safeErrorMessage } from '@/api/client'
 import TableSkeleton from '@/components/TableSkeleton.vue'
+import type { TaskHistoryRecord } from '@/types'
 
 export interface TaskRecord {
   id: string
@@ -10,6 +13,9 @@ export interface TaskRecord {
   scope: string
   status: 'running' | 'succeeded' | 'partially_failed' | 'failed'
   startedAt: string
+  completedAt?: string
+  completed?: boolean
+  summary?: { total: number; succeeded: number; failed: number }
   detail?: string
 }
 
@@ -20,10 +26,17 @@ const props = withDefaults(defineProps<{
 }>(), {
   loading: false,
   error: '',
-  tasks: () => [],
 })
 
 const emit = defineEmits<{ retry: [] }>()
+const taskRows = ref<TaskRecord[]>([])
+const loadState = ref<'loading' | 'ready' | 'error'>(
+  props.tasks === undefined && !props.error ? 'loading' : 'ready',
+)
+const loadError = ref('')
+const displayedTasks = computed(() => props.tasks ?? taskRows.value)
+const displayedLoading = computed(() => props.loading || (props.tasks === undefined && loadState.value === 'loading'))
+const displayedError = computed(() => props.error || (props.tasks === undefined ? loadError.value : ''))
 
 function taskStatusLabel(status: TaskRecord['status']): string {
   if (status === 'running') return '进行中'
@@ -40,8 +53,48 @@ function taskTypeLabel(type: string): string {
 }
 
 function retryTasks(): void {
-  emit('retry')
+  if (props.tasks !== undefined || props.error) {
+    emit('retry')
+    return
+  }
+  void loadTasks()
 }
+
+function taskRow(task: TaskHistoryRecord): TaskRecord {
+  return {
+    id: task.task_id,
+    type: task.type,
+    scope: task.scope,
+    status: task.status,
+    startedAt: task.started_at,
+    completedAt: task.completed_at ?? '',
+    completed: task.completed,
+    summary: task.summary,
+  }
+}
+
+async function loadTasks(): Promise<void> {
+  if (props.tasks !== undefined || props.error) return
+  loadState.value = 'loading'
+  loadError.value = ''
+  try {
+    const response = await api.getTasks()
+    taskRows.value = response.tasks.map(taskRow)
+    loadState.value = 'ready'
+  } catch (error) {
+    loadError.value = safeErrorMessage(error)
+    loadState.value = 'error'
+  }
+}
+
+function summaryLabel(task: TaskRecord): string {
+  if (!task.summary) return ''
+  return `${task.summary.succeeded}/${task.summary.total} 成功，${task.summary.failed} 失败`
+}
+
+onMounted(() => {
+  if (props.tasks === undefined && !props.error && !props.loading) void loadTasks()
+})
 </script>
 
 <template>
@@ -52,12 +105,12 @@ function retryTasks(): void {
       </div>
     </header>
 
-    <section class="workspace-panel route-panel tasks-workspace" aria-label="同步任务记录" :aria-busy="props.loading">
-      <TableSkeleton v-if="props.loading" label="正在加载任务记录" :columns="4" />
-      <div v-else-if="props.error" class="task-state task-error" role="alert">
+    <section class="workspace-panel route-panel tasks-workspace" aria-label="同步任务记录" :aria-busy="displayedLoading">
+      <TableSkeleton v-if="displayedLoading" label="正在加载任务记录" :columns="4" />
+      <div v-else-if="displayedError" class="task-state task-error" role="alert">
         <CircleAlert :size="24" aria-hidden="true" />
         <strong>任务记录加载失败</strong>
-        <p>{{ props.error }}</p>
+        <p>{{ displayedError }}</p>
         <button class="secondary-button" type="button" aria-label="重试任务记录" @click="retryTasks">
           <RotateCcw :size="16" aria-hidden="true" />
           重试
@@ -74,7 +127,7 @@ function retryTasks(): void {
             </tr>
           </thead>
           <tbody>
-            <tr v-if="props.tasks.length === 0" class="task-empty-row">
+            <tr v-if="displayedTasks.length === 0" class="task-empty-row">
               <td colspan="4" class="task-empty-cell">
                 <div class="task-empty-content">
                   <ListChecks :size="24" aria-hidden="true" />
@@ -83,7 +136,7 @@ function retryTasks(): void {
                 </div>
               </td>
             </tr>
-            <tr v-for="task in props.tasks" :key="task.id" :aria-label="`${taskTypeLabel(task.type)} ${task.scope}`">
+            <tr v-for="task in displayedTasks" :key="task.id" :aria-label="`${taskTypeLabel(task.type)} ${task.scope}`">
               <td data-label="任务类型">
                 <div class="task-primary-cell">
                   <RouterLink :to="{ name: 'task-detail', params: { id: task.id } }">
@@ -96,6 +149,7 @@ function retryTasks(): void {
               <td data-label="状态">
                 <span class="task-status" :class="`is-${task.status}`">{{ taskStatusLabel(task.status) }}</span>
                 <small v-if="task.detail" class="task-detail">{{ task.detail }}</small>
+                <small v-if="summaryLabel(task)" class="task-detail">{{ summaryLabel(task) }}</small>
               </td>
               <td data-label="开始时间">{{ task.startedAt }}</td>
             </tr>

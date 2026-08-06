@@ -132,6 +132,45 @@ export interface ModelDiscoveryTask {
   items: ModelDiscoveryItem[]
 }
 
+export type TaskHistoryStatus = 'running' | 'succeeded' | 'partially_failed' | 'failed'
+
+export interface TaskSummary {
+  total: number
+  succeeded: number
+  failed: number
+}
+
+export interface TaskHistoryItem {
+  item_id?: string
+  asset_id?: string
+  target_id?: string
+  scope?: string
+  status?: string
+  error_code?: string
+  message?: string
+  [key: string]: unknown
+}
+
+export interface TaskHistoryRecord {
+  task_id: string
+  type: string
+  scope: string
+  status: TaskHistoryStatus
+  completed: boolean
+  started_at: string
+  completed_at?: string | null
+  summary: TaskSummary
+  items?: TaskHistoryItem[]
+}
+
+export interface TaskHistoryListResponse {
+  tasks: TaskHistoryRecord[]
+  meta: {
+    total: number
+    capacity: number
+  }
+}
+
 export interface UpstreamGroup {
   name: string
   description?: string
