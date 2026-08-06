@@ -313,7 +313,6 @@ async function testConnection(target: TargetConfig): Promise<void> {
     })
     connectionStates.set(target.id, { state, result })
   } catch (error) {
-    store.setTargetValidation(target.id, 'failed')
     connectionStates.set(target.id, { state: 'failed', message: safeErrorMessage(error) })
   }
 }
@@ -432,7 +431,7 @@ async function testConnection(target: TargetConfig): Promise<void> {
                   <small v-if="capabilitySummary(target.id)" class="capability-summary">
                     {{ capabilitySummary(target.id) }}
                   </small>
-                  <small v-else-if="connectionState(target.id).message" class="error-text">
+                  <small v-if="connectionState(target.id).message" class="error-text">
                     {{ connectionState(target.id).message }}
                   </small>
                 </div>
