@@ -20,6 +20,7 @@ var safeErrorMessages = map[string]string{
 	"invalid_request":             "请求参数无效",
 	"target_not_found":            "目标实例不存在",
 	"upstream_not_found":          "上游实例不存在",
+	"task_not_found":              "任务记录不存在",
 	"asset_not_found":             "资产不存在",
 	"channel_not_found":           "目标渠道不存在",
 	"resource_in_use":             "资源仍有关联映射",

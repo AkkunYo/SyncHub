@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/AkkunYo/SyncHub/internal/config"
 	"github.com/AkkunYo/SyncHub/internal/modelcatalog"
@@ -25,11 +26,13 @@ func (s *server) discoverUpstreamModels(c *gin.Context) {
 	if !ok {
 		return
 	}
+	startedAt := time.Now().UTC()
 	task, err := s.models.Discover(c.Request.Context(), upstream, adapter, request.KeyIDs)
 	if err != nil {
 		respondDependencyError(c, err, upstreamFailure)
 		return
 	}
+	s.tasks.add(discoveryTaskRecord(task, upstream.ID, startedAt, time.Now().UTC()))
 	writeSuccess(c, http.StatusAccepted, task)
 }
 

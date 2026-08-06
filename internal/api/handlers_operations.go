@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/AkkunYo/SyncHub/internal/config"
 	"github.com/AkkunYo/SyncHub/internal/discovery"
@@ -269,6 +270,7 @@ func (s *server) batchSync(c *gin.Context) {
 		writeFailure(c, http.StatusBadRequest, "invalid_request")
 		return
 	}
+	startedAt := time.Now().UTC()
 	request, err := decodeStrictJSON[syncRequest](c)
 	if err != nil || validateIdentifier(request.UpstreamID) != nil || len(request.Units) == 0 || len(request.Units) > 1000 ||
 		validateText(request.Grant.SecurityProof, 4096, true) != nil {
@@ -438,7 +440,9 @@ func (s *server) batchSync(c *gin.Context) {
 			s.clearRuntimeState(key)
 		}
 	}
-	writeSuccess(c, http.StatusOK, result)
+	taskID := newTaskID()
+	s.tasks.add(syncTaskRecord(taskID, request.UpstreamID, startedAt, time.Now().UTC(), result))
+	writeSuccess(c, http.StatusOK, gin.H{"task_id": taskID, "units": result.Units})
 }
 
 func (s *server) matrix(c *gin.Context) {

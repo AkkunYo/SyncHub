@@ -36,6 +36,7 @@ type server struct {
 	deps    Dependencies
 	runtime *Runtime
 	models  modelcatalog.Catalog
+	tasks   *taskLedger
 
 	locksMu sync.Mutex
 	locks   map[runtimeKey]*tupleLock
@@ -85,6 +86,7 @@ func NewRouterWithRuntime(deps Dependencies, runtimeState *Runtime) (*gin.Engine
 		deps:    deps,
 		runtime: runtimeState,
 		models:  models,
+		tasks:   newTaskLedger(),
 		locks:   make(map[runtimeKey]*tupleLock),
 	}
 	engine := gin.New()
@@ -97,6 +99,8 @@ func NewRouterWithRuntime(deps Dependencies, runtimeState *Runtime) (*gin.Engine
 	v1 := engine.Group("/api/v1")
 	{
 		v1.GET("/health", s.health)
+		v1.GET("/tasks", s.listTasks)
+		v1.GET("/tasks/:task_id", s.getTask)
 		v1.GET("/config", s.getConfig)
 		v1.PUT("/config/app", s.updateApp)
 
