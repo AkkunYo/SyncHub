@@ -12,6 +12,9 @@ import (
 
 func TestSyncRejectsUnverifiedTargetBeforeExternalCalls(t *testing.T) {
 	env := newTestEnvironment()
+	env.store.cfg.Targets[0].ValidationStatus = config.TargetValidationUnverified
+	env.store.cfg.Targets[0].ValidatedAt = nil
+	env.store.cfg.Targets[0].ValidationCapabilities = platform.TargetCapabilities{}
 	body := `{"upstream_id":"source-a","units":[{"unit_id":"u-1","asset_id":"source-a:channel:7:key:0","target_id":"target-a","settings":{"models":["gpt-4.1"],"target_group":"default","priority":0,"weight":100}}],"grant":{}}`
 
 	recorder, envelope := request(t, env.router(t), http.MethodPost, "/api/v1/sync", body, "application/json")
@@ -64,21 +67,26 @@ func TestTargetCredentialUpdateInvalidatesValidation(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if got := env.store.cfg.Targets[0].ValidationStatus; got != "" {
+	if got := env.store.cfg.Targets[0].ValidationStatus; got != config.TargetValidationUnverified {
 		t.Fatalf("validation survived credential update: %#v", got)
+	}
+	if env.store.cfg.Targets[0].ValidatedAt != nil || len(env.store.cfg.Targets[0].ValidationCapabilities.Providers) != 0 {
+		t.Fatalf("validation summary survived credential update: %#v", env.store.cfg.Targets[0])
 	}
 }
 
 func TestFailedTargetConnectionTestDoesNotPersistValidation(t *testing.T) {
 	env := newTestEnvironment()
+	before := cloneConfig(env.store.cfg).Targets[0]
 	target := env.resolver.targets["target-a"].adapter.(*fakeTarget)
 	target.listErr = platform.ErrRateLimited
 	recorder, envelope := request(t, env.router(t), http.MethodPost, "/api/v1/targets/target-a/connection-tests", "", "")
 	if recorder.Code == http.StatusOK || errorCode(t, envelope) == "internal_error" {
 		t.Fatalf("failed validation status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if got := env.store.cfg.Targets[0].ValidationStatus; got != "" {
-		t.Fatalf("failed validation persisted state: %#v", got)
+	got := env.store.cfg.Targets[0]
+	if got.ValidationStatus != before.ValidationStatus || !got.ValidatedAt.Equal(*before.ValidatedAt) || got.ValidationCapabilities.Platform != before.ValidationCapabilities.Platform {
+		t.Fatalf("failed validation changed persisted state: before=%#v after=%#v", before, got)
 	}
 }
 

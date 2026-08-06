@@ -357,6 +357,11 @@ func newTestEnvironment() *testEnvironment {
 			},
 			Targets: []config.TargetConfig{{
 				ID: "target-a", Name: "Target A", Type: "newapi", BaseURL: "https://target.example.com", AccessToken: testSecret,
+				ValidationStatus: config.TargetValidationVerified,
+				ValidatedAt:      validationTime(2026, time.August, 6),
+				ValidationCapabilities: platform.TargetCapabilities{Platform: "newapi", Providers: map[string]platform.ProviderCapability{
+					platform.ProviderOpenAI: {Modes: []platform.SyncMode{platform.SyncModeStaticKey}},
+				}},
 			}},
 			Upstreams: []config.UpstreamConfig{{
 				ID: "source-a", Name: "Source A", Type: "newapi", BaseURL: "https://source.example.com", AccessToken: testSecret,
@@ -1221,6 +1226,13 @@ func TestNewRouterRejectsMissingDependencies(t *testing.T) {
 func cloneConfig(cfg config.Config) config.Config {
 	cloned := cfg
 	cloned.Targets = append([]config.TargetConfig(nil), cfg.Targets...)
+	for i := range cloned.Targets {
+		if cfg.Targets[i].ValidatedAt != nil {
+			validatedAt := *cfg.Targets[i].ValidatedAt
+			cloned.Targets[i].ValidatedAt = &validatedAt
+		}
+		cloned.Targets[i].ValidationCapabilities = cloneTargetCapabilities(cfg.Targets[i].ValidationCapabilities)
+	}
 	cloned.Upstreams = append([]config.UpstreamConfig(nil), cfg.Upstreams...)
 	for i := range cloned.Upstreams {
 		cloned.Upstreams[i].Keys = append([]config.GenericKeyConfig(nil), cfg.Upstreams[i].Keys...)
@@ -1228,6 +1240,23 @@ func cloneConfig(cfg config.Config) config.Config {
 			cloned.Upstreams[i].Keys[j].Models = append([]string(nil), cfg.Upstreams[i].Keys[j].Models...)
 		}
 		cloned.Upstreams[i].SyncMappings = cloneMappings(cfg.Upstreams[i].SyncMappings)
+	}
+	return cloned
+}
+
+func validationTime(year int, month time.Month, day int) *time.Time {
+	value := time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
+	return &value
+}
+
+func cloneTargetCapabilities(value platform.TargetCapabilities) platform.TargetCapabilities {
+	cloned := value
+	if value.Providers != nil {
+		cloned.Providers = make(map[string]platform.ProviderCapability, len(value.Providers))
+		for provider, capability := range value.Providers {
+			capability.Modes = append([]platform.SyncMode(nil), capability.Modes...)
+			cloned.Providers[provider] = capability
+		}
 	}
 	return cloned
 }
