@@ -90,6 +90,18 @@ func TestFailedTargetConnectionTestDoesNotPersistValidation(t *testing.T) {
 	}
 }
 
+func TestMatrixTargetIncludesValidationSummary(t *testing.T) {
+	env := newTestEnvironment()
+	recorder, envelope := request(t, env.router(t), http.MethodGet, "/api/v1/matrix?upstream_id=source-a", "", "")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	target := dataObject(t, envelope)["targets"].([]any)[0].(map[string]any)
+	if target["validation_status"] != string(config.TargetValidationVerified) || target["validated_at"] == "" || target["validation_capabilities"] == nil {
+		t.Fatalf("matrix target validation=%#v", target)
+	}
+}
+
 func seedTargetValidation(t *testing.T, env *testEnvironment) {
 	t.Helper()
 	recorder, _ := request(t, env.router(t), http.MethodPost, "/api/v1/targets/target-a/connection-tests", "", "")
