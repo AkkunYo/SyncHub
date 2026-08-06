@@ -19,23 +19,25 @@ export interface TaskRecord {
   detail?: string
 }
 
+// `undefined` distinguishes route-owned auto-loading from legacy controlled tests.
 const props = withDefaults(defineProps<{
   loading?: boolean
   error?: string
   tasks?: TaskRecord[]
 }>(), {
-  loading: false,
+  loading: undefined,
   error: '',
+  tasks: () => undefined as unknown as TaskRecord[],
 })
 
 const emit = defineEmits<{ retry: [] }>()
 const taskRows = ref<TaskRecord[]>([])
 const loadState = ref<'loading' | 'ready' | 'error'>(
-  props.tasks === undefined && !props.error ? 'loading' : 'ready',
+  props.tasks === undefined && props.loading === undefined && !props.error ? 'loading' : 'ready',
 )
 const loadError = ref('')
 const displayedTasks = computed(() => props.tasks ?? taskRows.value)
-const displayedLoading = computed(() => props.loading || (props.tasks === undefined && loadState.value === 'loading'))
+const displayedLoading = computed(() => props.loading === true || (props.tasks === undefined && loadState.value === 'loading'))
 const displayedError = computed(() => props.error || (props.tasks === undefined ? loadError.value : ''))
 
 function taskStatusLabel(status: TaskRecord['status']): string {
@@ -53,7 +55,7 @@ function taskTypeLabel(type: string): string {
 }
 
 function retryTasks(): void {
-  if (props.tasks !== undefined || props.error) {
+  if (props.tasks !== undefined || props.error || props.loading !== undefined) {
     emit('retry')
     return
   }
@@ -74,7 +76,7 @@ function taskRow(task: TaskHistoryRecord): TaskRecord {
 }
 
 async function loadTasks(): Promise<void> {
-  if (props.tasks !== undefined || props.error) return
+  if (props.tasks !== undefined || props.error || props.loading !== undefined) return
   loadState.value = 'loading'
   loadError.value = ''
   try {
@@ -93,7 +95,7 @@ function summaryLabel(task: TaskRecord): string {
 }
 
 onMounted(() => {
-  if (props.tasks === undefined && !props.error && !props.loading) void loadTasks()
+  if (props.tasks === undefined && !props.error && props.loading === undefined) void loadTasks()
 })
 </script>
 
