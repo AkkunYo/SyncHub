@@ -10,7 +10,7 @@ import {
   Search,
   Trash2,
 } from 'lucide-vue-next'
-import { RouterLink, routeLocationKey, routerKey, type LocationQueryRaw } from 'vue-router'
+import { RouterLink, routeLocationKey, routerKey } from 'vue-router'
 
 import { api, safeErrorMessage } from '@/api/client'
 import ModalDialog from '@/components/ModalDialog.vue'
@@ -36,52 +36,60 @@ function queryValue(key: string): string {
   return Array.isArray(value) ? value[0] ?? '' : value ?? ''
 }
 
+fallbackSearch.value = queryValue('q')
+fallbackSource.value = queryValue('source') === 'managed' || queryValue('source') === 'native'
+  ? queryValue('source') as 'managed' | 'native'
+  : 'all'
+fallbackStatus.value = queryValue('status') === 'enabled' || queryValue('status') === 'disabled'
+  ? queryValue('status') as 'enabled' | 'disabled'
+  : 'all'
+const initialPage = Number.parseInt(queryValue('page'), 10)
+fallbackPage.value = Number.isFinite(initialPage) && initialPage > 0 ? initialPage : 1
+
 function updateQuery(changes: Record<string, string | undefined>): void {
-  if (!router || !route) return
-  const query: LocationQueryRaw = { ...route.query }
+  const url = new URL(window.location.href)
   for (const [key, value] of Object.entries(changes)) {
-    if (value) query[key] = value
-    else delete query[key]
+    if (value) url.searchParams.set(key, value)
+    else url.searchParams.delete(key)
   }
-  void router.replace({ query })
+  window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`)
 }
 
 const searchQuery = computed({
-  get: () => route ? queryValue('q') : fallbackSearch.value,
+  get: () => fallbackSearch.value,
   set: (value: string) => {
-    if (!route) fallbackSearch.value = value
+    fallbackSearch.value = value
     updateQuery({ q: value.trim() || undefined, page: undefined })
   },
 })
 const sourceFilter = computed<'all' | 'managed' | 'native'>({
   get: () => {
-    const value = route ? queryValue('source') : fallbackSource.value
+    const value = fallbackSource.value
     return value === 'managed' || value === 'native' ? value : 'all'
   },
   set: (value) => {
-    if (!route) fallbackSource.value = value
+    fallbackSource.value = value
     updateQuery({ source: value === 'all' ? undefined : value, page: undefined })
   },
 })
 const statusFilter = computed<'all' | 'enabled' | 'disabled'>({
   get: () => {
-    const value = route ? queryValue('status') : fallbackStatus.value
+    const value = fallbackStatus.value
     return value === 'enabled' || value === 'disabled' ? value : 'all'
   },
   set: (value) => {
-    if (!route) fallbackStatus.value = value
+    fallbackStatus.value = value
     updateQuery({ status: value === 'all' ? undefined : value, page: undefined })
   },
 })
 const currentPage = computed({
   get: () => {
-    const raw = route ? queryValue('page') : String(fallbackPage.value)
-    const page = Number.parseInt(raw, 10)
+    const page = fallbackPage.value
     return Number.isFinite(page) && page > 0 ? page : 1
   },
   set: (value: number) => {
     const page = Math.max(1, Math.floor(value))
-    if (!route) fallbackPage.value = page
+    fallbackPage.value = page
     updateQuery({ page: page === 1 ? undefined : String(page) })
   },
 })
@@ -129,13 +137,10 @@ const enabledChannelCount = computed(() => store.channels.filter((channel) => ch
 const channelSummaryReady = computed(() => store.channelState === 'ready')
 
 function clearFilters(): void {
-  if (!route) {
-    fallbackSearch.value = ''
-    fallbackSource.value = 'all'
-    fallbackStatus.value = 'all'
-    fallbackPage.value = 1
-    return
-  }
+  fallbackSearch.value = ''
+  fallbackSource.value = 'all'
+  fallbackStatus.value = 'all'
+  fallbackPage.value = 1
   updateQuery({ q: undefined, source: undefined, status: undefined, page: undefined })
 }
 

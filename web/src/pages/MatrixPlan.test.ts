@@ -1,7 +1,7 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { render, screen, within } from '@testing-library/vue'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it } from 'vitest'
+import { expect, it } from 'vitest'
 
 import { useConsoleStore } from '@/stores/console'
 import type { MatrixData, SanitizedConfig } from '@/types'
@@ -71,7 +71,7 @@ it('previews a frozen three-step sync plan with target-specific settings', async
   await user.click(screen.getByRole('button', { name: '批量同步 1 个资产' }))
 
   const dialog = screen.getByRole('dialog', { name: '批量同步设置' })
-  expect(within(dialog).getByRole('list', { name: '同步计划步骤' })).toHaveTextContent('选择 Key / 模型')
+  expect(within(dialog).getByRole('navigation', { name: '同步计划步骤' })).toHaveTextContent('选择 Key / 模型')
   expect(within(dialog).getByRole('region', { name: '同步计划预览' })).toHaveTextContent('2 个同步单元')
   expect(within(dialog).getByText(/计划 revision draft-/)).toBeInTheDocument()
   expect(within(dialog).getByLabelText('Target Alpha 分组')).toBeInTheDocument()

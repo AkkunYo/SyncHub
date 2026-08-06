@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import {
   CheckCircle2,
@@ -17,7 +17,13 @@ import ModalDialog from '@/components/ModalDialog.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import TableSkeleton from '@/components/TableSkeleton.vue'
 import { useConsoleStore } from '@/stores/console'
-import type { AssetSyncResult, MatrixRow, MatrixStatus, SyncTargetResult } from '@/types'
+import type {
+  AssetSyncResult,
+  MatrixRow,
+  MatrixStatus,
+  SyncSettings,
+  SyncTargetResult,
+} from '@/types'
 
 const store = useConsoleStore()
 const selectedAssets = ref<string[]>([])
@@ -27,15 +33,31 @@ const group = ref('default')
 const priority = ref(0)
 const weight = ref(100)
 const selectedTargets = ref<string[]>([])
+const targetOverrides = reactive<Record<string, SyncSettings>>({})
+const planItems = ref<readonly SyncPlanItem[]>([])
+const planRevisionNumber = ref(0)
 const submitting = ref(false)
 const validationError = ref('')
 const results = ref<AssetSyncResult[]>([])
 const assetQuery = ref('')
 const statusFilter = ref<MatrixStatus | 'all'>('all')
+const planRevision = computed(() => `draft-${planRevisionNumber.value}`)
 
 interface SubmittedRow {
   row: MatrixRow
   targetIds: string[]
+}
+
+interface SyncPlanItem {
+  unitId: string
+  assetId: string
+  assetName: string
+  targetId: string
+  targetName: string
+  upstreamGroup?: string
+  models: readonly string[]
+  settings: Readonly<SyncSettings>
+  action: 'create' | 'update' | 'skip' | 'conflict' | 'incompatible'
 }
 
 const activeMatrix = computed(() =>
@@ -144,6 +166,62 @@ function clearSelection(): void {
   selectedAssets.value = []
 }
 
+function defaultTargetSettings(): SyncSettings {
+  return {
+    models: parseModels(),
+    group: group.value.trim() || 'default',
+    priority: priority.value,
+    weight: weight.value,
+  }
+}
+
+function collectSubmittedRows(targetIds: readonly string[]): SubmittedRow[] {
+  return selectedRows.value
+    .map((row) => ({
+      row,
+      targetIds: targetIds.filter((targetId) =>
+        row.cells.some((cell) => cell.target_id === targetId && cell.status === 'unsynced'),
+      ),
+    }))
+    .filter(({ targetIds: ids }) => ids.length > 0)
+}
+
+function freezePlan(items: SyncPlanItem[]): readonly SyncPlanItem[] {
+  return Object.freeze(items.map((item) => Object.freeze({
+    ...item,
+    models: Object.freeze([...item.models]),
+    settings: Object.freeze({ ...item.settings }),
+  })))
+}
+
+function refreshDraftPlan(): void {
+  const normalizedModels = parseModels()
+  const submittedRows = collectSubmittedRows(selectedTargets.value)
+  let sequence = 0
+  const draft = submittedRows.flatMap(({ row, targetIds }) => targetIds.map((targetId) => {
+    const settings = targetOverrides[targetId] ?? defaultTargetSettings()
+    const cell = row.cells.find((candidate) => candidate.target_id === targetId)
+    return {
+      unitId: `sync-${++sequence}`,
+      assetId: row.asset.id,
+      assetName: row.asset.name,
+      targetId,
+      targetName: targetLabel(targetId),
+      upstreamGroup: row.asset.raw_type === 'newapi-token'
+        ? row.asset.metadata.upstream_group?.trim()
+        : undefined,
+      models: [...normalizedModels],
+      settings: {
+        ...settings,
+        models: [...normalizedModels],
+      },
+      action: cell?.status === 'unsynced' ? 'create' : 'skip',
+    } satisfies SyncPlanItem
+  }))
+  planItems.value = freezePlan(draft)
+  planRevisionNumber.value += 1
+}
+
 function openSync(): void {
   const modelSet = new Set(selectedRows.value.flatMap((row) => row.asset.models))
   models.value = [...modelSet].join(', ')
@@ -153,9 +231,13 @@ function openSync(): void {
   group.value = 'default'
   priority.value = 0
   weight.value = 100
+  for (const targetId of Object.keys(targetOverrides)) delete targetOverrides[targetId]
+  const defaults = defaultTargetSettings()
+  for (const target of matrixTargets.value) targetOverrides[target.id] = { ...defaults }
   validationError.value = ''
   results.value = []
   syncOpen.value = true
+  refreshDraftPlan()
 }
 
 function closeSync(): void {
@@ -167,6 +249,10 @@ function parseModels(): string[] {
   return [...new Set(models.value.split(',').map((model) => model.trim()).filter(Boolean))]
 }
 
+watch([selectedTargets, models, group, priority, weight, targetOverrides], () => {
+  if (syncOpen.value && !submitting.value) refreshDraftPlan()
+}, { deep: true })
+
 function failedTarget(targetId: string, code = 'request_failed'): SyncTargetResult {
   return {
     target_id: targetId,
@@ -174,10 +260,6 @@ function failedTarget(targetId: string, code = 'request_failed'): SyncTargetResu
     code,
     retryable: true,
   }
-}
-
-function failedTargets(targetIds: readonly string[], code = 'request_failed'): SyncTargetResult[] {
-  return targetIds.map((targetId) => failedTarget(targetId, code))
 }
 
 async function submitSync(): Promise<void> {
@@ -190,15 +272,7 @@ async function submitSync(): Promise<void> {
     validationError.value = '至少选择一个目标实例'
     return
   }
-  const submittedTargetIds = [...selectedTargets.value]
-  const submittedRows: SubmittedRow[] = selectedRows.value
-    .map((row) => ({
-      row,
-      targetIds: submittedTargetIds.filter((targetId) =>
-        row.cells.some((cell) => cell.target_id === targetId && cell.status === 'unsynced'),
-      ),
-    }))
-    .filter(({ targetIds }) => targetIds.length > 0)
+  const submittedRows = collectSubmittedRows(selectedTargets.value)
   if (submittedRows.length === 0) {
     validationError.value = '所选资产没有可同步的目标'
     return
@@ -206,7 +280,8 @@ async function submitSync(): Promise<void> {
   const submittedUpstreamId = store.selectedUpstreamId
   validationError.value = ''
   results.value = []
-  await runSync(submittedRows, false, submittedUpstreamId)
+  refreshDraftPlan()
+  await runSync(planItems.value, false, submittedUpstreamId)
 }
 
 function mergeSyncResults(current: AssetSyncResult[], completed: AssetSyncResult[]): AssetSyncResult[] {
@@ -225,34 +300,28 @@ function mergeSyncResults(current: AssetSyncResult[], completed: AssetSyncResult
 }
 
 async function runSync(
-  submittedRows: SubmittedRow[],
+  submittedPlan: readonly SyncPlanItem[],
   merge: boolean,
   submittedUpstreamId: string,
 ): Promise<void> {
-  if (submittedRows.length === 0) {
+  if (submittedPlan.length === 0) {
     validationError.value = merge ? '没有可重试的失败目标' : '所选资产没有可同步的目标'
     return
   }
   submitting.value = true
   try {
-    const normalizedModels = parseModels()
-    let sequence = 0
-    const units = submittedRows.flatMap(({ row, targetIds }) =>
-      targetIds.map((targetId) => ({
-        unit_id: `sync-${++sequence}`,
-        asset_id: row.asset.id,
-        target_id: targetId,
-        upstream_group: row.asset.raw_type === 'newapi-token'
-          ? row.asset.metadata.upstream_group?.trim()
-          : undefined,
-        settings: {
-          models: normalizedModels,
-          target_group: group.value.trim() || 'default',
-          priority: priority.value,
-          weight: weight.value,
-        },
-      })),
-    )
+    const units = submittedPlan.map((item) => ({
+      unit_id: item.unitId,
+      asset_id: item.assetId,
+      target_id: item.targetId,
+      upstream_group: item.upstreamGroup,
+      settings: {
+        models: [...item.settings.models],
+        target_group: item.settings.group,
+        priority: item.settings.priority,
+        weight: item.settings.weight,
+      },
+    }))
     let completed: AssetSyncResult[]
     try {
       const response = await api.sync({
@@ -260,19 +329,24 @@ async function runSync(
         units,
       })
       const byTuple = new Map(response.units.map((unit) => [`${unit.asset_id}\u0000${unit.target_id}`, unit]))
-      completed = submittedRows.map(({ row, targetIds }) => ({
-        assetId: row.asset.id,
-        assetName: row.asset.name,
-        targets: targetIds.map((targetId) =>
-          byTuple.get(`${row.asset.id}\u0000${targetId}`) ?? failedTarget(targetId, 'upstream_failure'),
-        ),
-      }))
+      const grouped = new Map<string, AssetSyncResult>()
+      for (const item of submittedPlan) {
+        const result = byTuple.get(`${item.assetId}\u0000${item.targetId}`)
+          ?? failedTarget(item.targetId, 'upstream_failure')
+        const existing = grouped.get(item.assetId)
+        if (existing) existing.targets.push(result)
+        else grouped.set(item.assetId, { assetId: item.assetId, assetName: item.assetName, targets: [result] })
+      }
+      completed = [...grouped.values()]
     } catch (error) {
-      completed = submittedRows.map(({ row, targetIds }) => ({
-        assetId: row.asset.id,
-        assetName: row.asset.name,
-        targets: failedTargets(targetIds, error instanceof Error ? 'request_failed' : 'internal_error'),
-      }))
+      const grouped = new Map<string, AssetSyncResult>()
+      for (const item of submittedPlan) {
+        const existing = grouped.get(item.assetId)
+        const failure = failedTarget(item.targetId, error instanceof Error ? 'request_failed' : 'internal_error')
+        if (existing) existing.targets.push(failure)
+        else grouped.set(item.assetId, { assetId: item.assetId, assetName: item.assetName, targets: [failure] })
+      }
+      completed = [...grouped.values()]
     }
     results.value = merge ? mergeSyncResults(results.value, completed) : completed
     if (store.applySyncResults(completed, submittedUpstreamId)) {
@@ -298,7 +372,11 @@ async function retryFailedTargets(): Promise<void> {
   }
   const submittedUpstreamId = store.selectedUpstreamId
   validationError.value = ''
-  await runSync(submittedRows, true, submittedUpstreamId)
+  const previousTargets = selectedTargets.value
+  selectedTargets.value = [...new Set(submittedRows.flatMap(({ targetIds }) => targetIds))]
+  refreshDraftPlan()
+  await runSync(planItems.value, true, submittedUpstreamId)
+  selectedTargets.value = previousTargets
 }
 
 function targetLabel(targetId: string): string {
@@ -563,6 +641,14 @@ function matrixStatusLabel(status: string): string {
 
     <ModalDialog v-if="syncOpen" title="批量同步设置" close-label="关闭批量同步" @close="closeSync">
       <form class="form-stack" @submit.prevent="submitSync">
+        <nav class="sync-plan-steps" aria-label="同步计划步骤">
+          <div class="sync-plan-step-list">
+            <div class="is-complete"><strong>1</strong><span>选择 Key / 模型</span></div>
+            <div class="is-current"><strong>2</strong><span>目标策略</span></div>
+            <div><strong>3</strong><span>计划预览</span></div>
+          </div>
+        </nav>
+
         <div class="form-grid">
           <label class="field field-wide">
             <span>模型</span>
@@ -594,6 +680,45 @@ function matrixStatusLabel(status: string): string {
             <span>{{ target.name }}</span>
           </label>
         </fieldset>
+
+        <section v-if="selectedTargets.length" class="target-overrides" aria-label="逐目标策略">
+          <header>
+            <h3>逐目标覆盖</h3>
+            <span>默认策略可按目标单独调整</span>
+          </header>
+          <div v-for="target in matrixTargets.filter((item) => selectedTargets.includes(item.id))" :key="target.id" class="target-override-row">
+            <strong>{{ target.name }}</strong>
+            <label>
+              <span class="sr-only">{{ target.name }} 分组</span>
+              <input v-model="targetOverrides[target.id]!.group" type="text" :aria-label="`${target.name} 分组`" />
+            </label>
+            <label>
+              <span class="sr-only">{{ target.name }} 优先级</span>
+              <input v-model.number="targetOverrides[target.id]!.priority" type="number" :aria-label="`${target.name} 优先级`" />
+            </label>
+            <label>
+              <span class="sr-only">{{ target.name }} 权重</span>
+              <input v-model.number="targetOverrides[target.id]!.weight" type="number" min="0" :aria-label="`${target.name} 权重`" />
+            </label>
+          </div>
+        </section>
+
+        <section class="sync-plan-preview" aria-label="同步计划预览">
+          <header>
+            <div>
+              <h3>同步计划预览</h3>
+              <span>{{ planItems.length }} 个同步单元</span>
+            </div>
+            <code>计划 revision {{ planRevision }}</code>
+          </header>
+          <div v-if="planItems.length" class="sync-plan-list">
+            <div v-for="item in planItems" :key="item.unitId" class="sync-plan-list-item">
+              <span><strong>{{ item.assetName }}</strong><small>{{ item.targetName }}</small></span>
+              <span class="sync-plan-meta"><b>{{ item.action === 'create' ? '创建' : item.action }}</b><small>{{ item.settings.models.join(', ') }}</small></span>
+            </div>
+          </div>
+          <p v-else class="muted">当前选择没有可执行的同步单元</p>
+        </section>
 
         <p v-if="validationError" class="form-error" role="alert">{{ validationError }}</p>
 
@@ -789,6 +914,148 @@ function matrixStatusLabel(status: string): string {
   pointer-events: auto;
 }
 
+.sync-plan-steps {
+  margin: 0 0 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.sync-plan-step-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.sync-plan-step-list > div {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sync-plan-step-list > div.is-current {
+  color: var(--blue);
+  font-weight: 700;
+}
+
+.sync-plan-step-list > div.is-complete {
+  color: #047857;
+}
+
+.sync-plan-steps strong {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 11px;
+}
+
+.target-overrides,
+.sync-plan-preview {
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.target-overrides header,
+.sync-plan-preview > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.target-overrides h3,
+.sync-plan-preview h3 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.target-overrides header span,
+.sync-plan-preview header span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.target-override-row {
+  display: grid;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line);
+  grid-template-columns: minmax(100px, 1.5fr) repeat(3, minmax(70px, 1fr));
+}
+
+.target-override-row strong {
+  font-size: 12px;
+}
+
+.target-override-row input {
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.sync-plan-preview code {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.sync-plan-list {
+  max-height: 180px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  list-style: none;
+}
+
+.sync-plan-list-item {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--line);
+}
+
+.sync-plan-list-item:last-child {
+  border-bottom: 0;
+}
+
+.sync-plan-list-item > span,
+.sync-plan-meta {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.sync-plan-list small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sync-plan-meta {
+  max-width: 58%;
+  justify-items: end;
+  text-align: right;
+}
+
+.sync-plan-meta b {
+  color: #047857;
+  font-size: 11px;
+}
+
 @media (max-width: 620px) {
   .sync-page {
     display: block;
@@ -828,6 +1095,28 @@ function matrixStatusLabel(status: string): string {
 
   .matrix-table tbody tr {
     border-left: 3px solid var(--line);
+  }
+
+  .sync-plan-step-list > div {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+    padding-bottom: 8px;
+    font-size: 11px;
+  }
+
+  .target-override-row {
+    grid-template-columns: 1fr 1fr 1fr;
+  }
+
+  .target-override-row strong {
+    grid-column: 1 / -1;
+  }
+
+  .sync-plan-preview > header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
   }
 
   .selection-dock {

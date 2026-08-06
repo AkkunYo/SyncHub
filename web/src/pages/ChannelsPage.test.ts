@@ -62,13 +62,12 @@ async function renderChannels(initialPath = '/targets/target-a/channels') {
   await router.push(initialPath)
   await router.isReady()
   render(ChannelsPage, { global: { plugins: [pinia, router] } })
-  return { router }
 }
 
 describe('ChannelsPage pagination', () => {
   it('shows one page of channels and advances the URL-backed page', async () => {
     const user = userEvent.setup()
-    const { router } = await renderChannels('/targets/target-a/channels?page=2')
+    await renderChannels('/targets/target-a/channels?page=2')
 
     const table = screen.getByRole('table')
     expect(within(table).getAllByRole('row')).toHaveLength(11)
@@ -77,7 +76,7 @@ describe('ChannelsPage pagination', () => {
     expect(screen.getByText('显示 11-20 / 21 个渠道')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: '下一页' }))
-    expect(router.currentRoute.value.query.page).toBe('3')
+    expect(new URL(window.location.href).searchParams.get('page')).toBe('3')
     expect(within(screen.getByRole('table')).getAllByRole('row')).toHaveLength(2)
     expect(screen.getByText('Channel 21')).toBeInTheDocument()
   })
