@@ -234,9 +234,10 @@ describe('Connection resource details', () => {
   })
 
   it('keeps the persisted successful target summary when a retest request fails', async () => {
-    const verifiedTarget = {
+    const verifiedTarget: SanitizedConfig['targets'][number] = {
       ...target,
-      validation_status: 'verified' as const,
+      type: 'newapi',
+      validation_status: 'verified',
       validated_at: '2026-08-06T10:00:00Z',
       validation_capabilities: {
         platform: 'newapi',
