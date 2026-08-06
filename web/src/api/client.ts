@@ -14,6 +14,7 @@ import type {
   TargetConfig,
   UpstreamAsset,
   UpstreamConfig,
+  UpstreamGroupsResponse,
   UpstreamKey,
   UpstreamKeyCreateInput,
   UpstreamKeyUpdateInput,
@@ -190,6 +191,8 @@ export const api = {
     request<{ refreshed: boolean }>(`/upstreams/${segment(upstreamId)}/refresh`, { method: 'POST' }),
   getAssets: (upstreamId: string) =>
     request<{ assets: UpstreamAsset[]; refreshed: boolean }>(`/upstreams/${segment(upstreamId)}/assets`),
+  getGroups: (upstreamId: string, signal?: AbortSignal) =>
+    request<UpstreamGroupsResponse>(`/upstreams/${segment(upstreamId)}/groups`, { signal }),
   getMatrix: (upstreamId: string, signal?: AbortSignal) =>
     request<MatrixData>(`/matrix?upstream_id=${encodeURIComponent(upstreamId)}`, { signal }),
   sync: (input: Record<string, unknown>) => request<SyncResponse>('/sync', { method: 'POST', body: input }),

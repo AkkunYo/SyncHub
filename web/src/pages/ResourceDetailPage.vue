@@ -31,6 +31,7 @@ import type {
   ModelProbeStatus,
   TargetConfig,
   UpstreamConfig,
+  UpstreamGroupsResponse,
   UpstreamKey,
   UpstreamKeyUpdateInput,
 } from '@/types'
@@ -63,6 +64,9 @@ const keyError = ref('')
 const keys = ref<UpstreamKey[]>([])
 const keysState = ref<LoadState>('idle')
 const keysError = ref('')
+const groupsState = ref<LoadState>('idle')
+const groupsSnapshot = ref<UpstreamGroupsResponse | null>(null)
+const groupsError = ref('')
 const modelPanelOpen = ref(false)
 const selectedKey = ref<UpstreamKey | null>(null)
 const modelsState = ref<LoadState>('idle')
@@ -140,6 +144,39 @@ async function loadKeys(): Promise<void> {
     keysError.value = safeErrorMessage(error)
     keysState.value = 'error'
   }
+}
+
+async function loadGroups(): Promise<void> {
+  const upstream = upstreamResource.value
+  if (!upstream || upstream.type !== 'newapi') return
+  groupsState.value = 'loading'
+  groupsError.value = ''
+  try {
+    groupsSnapshot.value = await api.getGroups(upstream.id)
+    groupsState.value = 'ready'
+  } catch (error) {
+    groupsError.value = safeErrorMessage(error)
+    groupsState.value = 'error'
+  }
+}
+
+async function refreshGroups(): Promise<void> {
+  const upstream = upstreamResource.value
+  if (!upstream || upstream.type !== 'newapi') return
+  groupsState.value = 'loading'
+  groupsError.value = ''
+  try {
+    await api.refreshUpstream(upstream.id)
+    groupsSnapshot.value = await api.getGroups(upstream.id)
+    groupsState.value = 'ready'
+  } catch (error) {
+    groupsError.value = safeErrorMessage(error)
+    groupsState.value = 'error'
+  }
+}
+
+function groupRatioLabel(ratio: number | null, known: boolean): string {
+  return known && ratio !== null ? `${ratio}x` : '未知'
 }
 
 function modelProbeLabel(status?: ModelProbeStatus): string {
@@ -279,6 +316,7 @@ onMounted(() => {
   if (!upstreamResource.value) return
   syncKeys(upstreamResource.value.keys ?? [])
   void loadKeys()
+  if (activeTab.value === 'groups') void loadGroups()
 })
 
 function setTab(tab: DetailTab): void {
@@ -286,6 +324,7 @@ function setTab(tab: DetailTab): void {
   if (tab === defaultTab.value) delete query.tab
   else query.tab = tab
   void router.replace({ query })
+  if (tab === 'groups' && groupsState.value === 'idle') void loadGroups()
 }
 
 function platformLabel(resource: UpstreamConfig | TargetConfig): string {
@@ -691,9 +730,75 @@ function capabilityLabel(value: string): string {
         role="tabpanel"
         aria-labelledby="upstream-groups-tab"
       >
-        <div class="detail-empty">
+        <header class="panel-toolbar">
+          <div>
+            <h2>New API 分组</h2>
+            <span v-if="groupsState === 'loading'">正在加载</span>
+            <span v-else-if="groupsState === 'error'">加载失败</span>
+            <span v-else>{{ groupsSnapshot?.groups.length ?? 0 }} 个分组</span>
+          </div>
+          <button
+            class="secondary-button"
+            type="button"
+            :disabled="groupsState === 'loading'"
+            @click="refreshGroups"
+          >
+            <RefreshCw :class="{ spin: groupsState === 'loading' }" :size="15" aria-hidden="true" />
+            刷新来源快照
+          </button>
+        </header>
+        <div v-if="groupsState === 'loading'" class="key-load-state" role="status" aria-label="正在加载分组快照">
+          <span class="spinner spinner-small" aria-hidden="true"></span>
+          正在加载分组快照
+        </div>
+        <div v-else-if="groupsState === 'error'" class="key-load-state is-error" role="alert">
+          <span>{{ groupsError }}</span>
+          <button class="secondary-button" type="button" aria-label="重试分组快照" @click="loadGroups">
+            <RotateCcw :size="15" aria-hidden="true" />
+            重试
+          </button>
+        </div>
+        <div v-else-if="groupsState === 'ready' && !groupsSnapshot?.refreshed" class="detail-empty">
           <CircleAlert :size="22" aria-hidden="true" />
-          <p>暂无可用分组快照</p>
+          <p>尚未生成完整分组快照</p>
+          <button class="primary-button" type="button" @click="refreshGroups">刷新来源快照</button>
+        </div>
+        <div v-else-if="groupsState === 'ready' && !groupsSnapshot?.groups.length" class="detail-empty">
+          <CircleAlert :size="22" aria-hidden="true" />
+          <p>当前用户没有可用分组</p>
+        </div>
+        <div v-else-if="groupsSnapshot" class="detail-table-wrap">
+          <table class="group-table" aria-label="New API 分组列表">
+            <thead>
+              <tr>
+                <th scope="col">分组</th>
+                <th scope="col">说明</th>
+                <th scope="col">倍率</th>
+                <th scope="col">模型</th>
+                <th scope="col">状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="group in groupsSnapshot.groups" :key="group.name">
+                <td data-label="分组">
+                  <div class="key-name">
+                    <strong>{{ group.name }}</strong>
+                    <small v-if="group.auto">自动分组</small>
+                  </div>
+                </td>
+                <td data-label="说明">{{ group.description || '--' }}</td>
+                <td data-label="倍率"><strong>{{ groupRatioLabel(group.ratio, group.ratio_known) }}</strong></td>
+                <td data-label="模型">
+                  <span :title="group.models.join(', ')">{{ group.model_count }} 个模型</span>
+                </td>
+                <td data-label="状态">
+                  <span class="compact-status" :class="group.models_verified ? 'is-on' : 'is-unverified'">
+                    {{ group.models_verified ? '已确证' : '未确证' }}
+                  </span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </section>
 
@@ -1191,13 +1296,15 @@ function capabilityLabel(value: string): string {
 
 .detail-table-wrap { overflow-x: auto; }
 
-.key-table {
+.key-table,
+.group-table {
   width: 100%;
   border-collapse: collapse;
   table-layout: fixed;
 }
 
-.key-table th {
+.key-table th,
+.group-table th {
   height: 36px;
   padding: 0 12px;
   border-bottom: 1px solid var(--line);
@@ -1214,7 +1321,8 @@ function capabilityLabel(value: string): string {
 .key-table th:nth-child(5) { width: 20%; }
 .key-table th:nth-child(6) { width: 128px; }
 
-.key-table td {
+.key-table td,
+.group-table td {
   height: 62px;
   padding: 9px 12px;
   border-bottom: 1px solid var(--line);
@@ -1223,6 +1331,13 @@ function capabilityLabel(value: string): string {
 }
 
 .key-table tbody tr:last-child td { border-bottom: 0; }
+
+.group-table th:nth-child(1) { width: 20%; }
+.group-table th:nth-child(2) { width: 30%; }
+.group-table th:nth-child(3) { width: 12%; }
+.group-table th:nth-child(4) { width: 20%; }
+.group-table th:nth-child(5) { width: 18%; }
+.group-table tbody tr:last-child td { border-bottom: 0; }
 
 .key-name {
   display: grid;

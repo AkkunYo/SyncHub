@@ -126,6 +126,23 @@ export interface ModelDiscoveryTask {
   items: ModelDiscoveryItem[]
 }
 
+export interface UpstreamGroup {
+  name: string
+  description?: string
+  ratio: number | null
+  ratio_known: boolean
+  models: string[]
+  model_count: number
+  models_verified: boolean
+  auto: boolean
+}
+
+export interface UpstreamGroupsResponse {
+  upstream_id: string
+  refreshed: boolean
+  groups: UpstreamGroup[]
+}
+
 export interface SanitizedConfig {
   app: AppSettings
   targets: TargetConfig[]
