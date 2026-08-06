@@ -70,7 +70,11 @@ function failure(code: string, message: string, status = 502): Response {
   )
 }
 
-async function renderDetail(kind: 'upstream' | 'target', upstreamId = 'source-generic') {
+async function renderDetail(
+  kind: 'upstream' | 'target',
+  upstreamId = 'source-generic',
+  pageConfig: SanitizedConfig = config,
+) {
   const pinia = createPinia()
   const router = createRouter({
     history: createMemoryHistory(),
@@ -94,7 +98,7 @@ async function renderDetail(kind: 'upstream' | 'target', upstreamId = 'source-ge
     ],
   })
   const store = useConsoleStore(pinia)
-  store.config = structuredClone(config)
+  store.config = structuredClone(pageConfig)
   store.initialState = 'ready'
   await router.push(kind === 'upstream' ? `/upstreams/${upstreamId}` : '/targets/target-main')
   await router.isReady()
@@ -196,6 +200,37 @@ describe('Connection resource details', () => {
       'href',
       '/targets/target-main/channels',
     )
+  })
+
+  it('restores persisted target validation and nested provider capabilities without retesting', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const verifiedConfig = {
+      ...config,
+      targets: [{
+        ...target,
+        validation_status: 'verified',
+        validated_at: '2026-08-06T10:00:00Z',
+        validation_capabilities: {
+          platform: 'newapi',
+          providers: {
+            openai: { modes: ['static_key', 'proxy_endpoint'] },
+            anthropic: { modes: ['static_key'] },
+          },
+        },
+      }],
+    } as SanitizedConfig
+
+    await renderDetail('target', 'source-generic', verifiedConfig)
+
+    expect(screen.getByText('连接验证通过')).toBeInTheDocument()
+    expect(screen.getByText('2026-08-06T10:00:00Z')).toBeInTheDocument()
+    const capabilities = screen.getByRole('region', { name: '目标能力' })
+    expect(within(capabilities).getByText('newapi')).toBeInTheDocument()
+    expect(within(capabilities).getByText('2 个 provider')).toBeInTheDocument()
+    expect(within(capabilities).getByText('static_key')).toBeInTheDocument()
+    expect(within(capabilities).getByText('proxy_endpoint')).toBeInTheDocument()
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('uses the keys endpoint as the authoritative detail source with loading and retry states', async () => {
