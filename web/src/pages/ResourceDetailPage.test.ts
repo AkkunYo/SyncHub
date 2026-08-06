@@ -360,6 +360,7 @@ describe('Connection resource details', () => {
     const modelRow = within(modal).getByRole('row', { name: /gpt-4o-mini/ })
     await user.selectOptions(within(modelRow).getByLabelText('gpt-4o-mini 测试协议'), 'responses')
     await user.click(within(modelRow).getByRole('button', { name: '测活 gpt-4o-mini' }))
+    await user.click(within(await screen.findByRole('dialog', { name: '确认模型测活' })).getByRole('button', { name: '确认测活' }))
     expect(await within(modelRow).findByText('健康')).toBeInTheDocument()
     expect(within(modelRow).getByText('842 ms')).toBeInTheDocument()
 
@@ -461,10 +462,13 @@ describe('Connection resource details', () => {
     await user.click(within(keyRow).getByRole('button', { name: '查看 主 Key 模型' }))
     const modal = await screen.findByRole('dialog', { name: '主 Key 模型' })
 
+    await user.selectOptions(within(modal).getByRole('combobox', { name: '模型排序' }), 'name_desc')
+    const sortedRows = within(within(modal).getByRole('table')).getAllByRole('row')
+    expect(sortedRows[1]).toHaveTextContent('zeta-model')
+    expect(sortedRows[2]).toHaveTextContent('alpha-model')
     await user.selectOptions(within(modal).getByRole('combobox', { name: '模型发现状态' }), 'unverified')
     expect(within(modal).getByText('zeta-model')).toBeInTheDocument()
     expect(within(modal).queryByText('alpha-model')).not.toBeInTheDocument()
-    await user.selectOptions(within(modal).getByRole('combobox', { name: '模型排序' }), 'name_desc')
 
     const zetaRow = within(modal).getByRole('row', { name: /zeta-model/ })
     await user.selectOptions(within(zetaRow).getByLabelText('zeta-model 测试协议'), 'responses')

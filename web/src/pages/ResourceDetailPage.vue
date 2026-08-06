@@ -41,6 +41,8 @@ type DetailTab = 'keys' | 'groups' | 'overview' | 'settings'
 type ConnectionState = 'unverified' | 'testing' | 'verified' | 'failed'
 type LoadState = 'idle' | 'loading' | 'ready' | 'error'
 type ProbeFilter = 'all' | 'untested' | ModelProbeStatus
+type DiscoveryFilter = 'all' | KeyModelObservation['discovery_status']
+type ModelSort = 'name_asc' | 'name_desc' | 'discovery' | 'probe'
 
 const props = defineProps<{
   kind: ResourceKind
@@ -74,8 +76,14 @@ const modelSnapshot = ref<KeyModelsResponse | null>(null)
 const modelsError = ref('')
 const modelQuery = ref('')
 const probeFilter = ref<ProbeFilter>('all')
+const discoveryFilter = ref<DiscoveryFilter>('all')
+const modelSort = ref<ModelSort>('name_asc')
 const protocolByModel = reactive<Record<string, ModelProbeProtocol>>({})
 const probingModels = ref(new Set<string>())
+const probeConfirmation = ref<{
+  model: KeyModelObservation
+  protocol: ModelProbeProtocol
+} | null>(null)
 const discoveryRunning = ref(false)
 const discoveryNotice = ref('')
 const discoveryWarning = ref('')
@@ -120,10 +128,27 @@ const isEditingKey = computed(() => Boolean(editingKeyId.value))
 const displayedKeys = computed(() => keys.value)
 const filteredModels = computed(() => {
   const query = modelQuery.value.trim().toLocaleLowerCase()
-  return (modelSnapshot.value?.models ?? []).filter((model) => {
+  const models = (modelSnapshot.value?.models ?? []).filter((model) => {
     const matchesQuery = !query || model.id.toLocaleLowerCase().includes(query)
     const status = model.probe?.status ?? 'untested'
-    return matchesQuery && (probeFilter.value === 'all' || probeFilter.value === status)
+    const matchesProbe = probeFilter.value === 'all' || probeFilter.value === status
+    const matchesDiscovery = discoveryFilter.value === 'all'
+      || discoveryFilter.value === model.discovery_status
+    return matchesQuery && matchesProbe && matchesDiscovery
+  })
+  return [...models].sort((left, right) => {
+    if (modelSort.value === 'name_desc') return right.id.localeCompare(left.id)
+    if (modelSort.value === 'discovery') {
+      const discoveryOrder = { discovered: 0, unverified: 1 }
+      const difference = discoveryOrder[left.discovery_status] - discoveryOrder[right.discovery_status]
+      return difference || left.id.localeCompare(right.id)
+    }
+    if (modelSort.value === 'probe') {
+      const leftStatus = left.probe?.status ?? 'untested'
+      const rightStatus = right.probe?.status ?? 'untested'
+      return leftStatus.localeCompare(rightStatus) || left.id.localeCompare(right.id)
+    }
+    return left.id.localeCompare(right.id)
   })
 })
 
@@ -238,9 +263,12 @@ function resetModelPanel(): void {
   modelsError.value = ''
   modelQuery.value = ''
   probeFilter.value = 'all'
+  discoveryFilter.value = 'all'
+  modelSort.value = 'name_asc'
   discoveryNotice.value = ''
   discoveryWarning.value = ''
   probingModels.value = new Set()
+  probeConfirmation.value = null
   for (const model of Object.keys(protocolByModel)) delete protocolByModel[model]
 }
 
@@ -307,10 +335,33 @@ async function refreshModels(requestedKey?: UpstreamKey): Promise<void> {
   }
 }
 
-async function probeModel(model: KeyModelObservation): Promise<void> {
+function requestProbe(model: KeyModelObservation): void {
+  const key = selectedKey.value
+  if (!key || probingModels.value.has(model.id)) return
+  probeConfirmation.value = {
+    model,
+    protocol: protocolByModel[model.id] ?? 'auto',
+  }
+}
+
+function probeProtocolLabel(protocol: ModelProbeProtocol): string {
+  const labels: Record<ModelProbeProtocol, string> = {
+    auto: '自动',
+    chat_completions: 'Chat',
+    responses: 'Responses',
+    completions: 'Completions',
+  }
+  return labels[protocol]
+}
+
+async function confirmProbe(): Promise<void> {
+  const pending = probeConfirmation.value
   const upstream = upstreamResource.value
   const key = selectedKey.value
-  if (!upstream || !key || probingModels.value.has(model.id)) return
+  if (!pending || !upstream || !key) return
+  probeConfirmation.value = null
+  const model = pending.model
+  if (probingModels.value.has(model.id)) return
   const inFlight = new Set(probingModels.value)
   inFlight.add(model.id)
   probingModels.value = inFlight
@@ -319,7 +370,7 @@ async function probeModel(model: KeyModelObservation): Promise<void> {
     const result = await api.probeModel(
       upstream.id,
       key.id,
-      { model: model.id, protocol: protocolByModel[model.id] ?? 'auto' },
+      { model: model.id, protocol: pending.protocol },
     )
     if (selectedKey.value?.id === key.id && modelSnapshot.value) {
       modelSnapshot.value = {
@@ -1073,6 +1124,23 @@ function capabilityLabel(value: string): string {
               <option value="unsupported">协议不支持</option>
             </select>
           </label>
+          <label class="model-filter">
+            <span>模型发现状态</span>
+            <select v-model="discoveryFilter" aria-label="模型发现状态">
+              <option value="all">全部发现状态</option>
+              <option value="discovered">已发现</option>
+              <option value="unverified">未验证</option>
+            </select>
+          </label>
+          <label class="model-filter">
+            <span>排序</span>
+            <select v-model="modelSort" aria-label="模型排序">
+              <option value="name_asc">模型名称 A-Z</option>
+              <option value="name_desc">模型名称 Z-A</option>
+              <option value="discovery">发现状态</option>
+              <option value="probe">测活状态</option>
+            </select>
+          </label>
         </div>
 
         <div
@@ -1121,6 +1189,22 @@ function capabilityLabel(value: string): string {
                       {{ modelProbeLabel(model.probe?.status) }}
                     </strong>
                     <span v-if="model.probe">{{ model.probe.latency_ms }} ms</span>
+                    <span v-if="model.probe" class="probe-metadata">
+                      <span>checked_at</span>
+                      <code>{{ model.probe.checked_at }}</code>
+                    </span>
+                    <span v-if="model.probe" class="probe-metadata">
+                      <span>error_code</span>
+                      <code>{{ model.probe.error_code || '无' }}</code>
+                    </span>
+                    <span v-if="model.probe" class="probe-metadata">
+                      <span>template_version</span>
+                      <code>模板 {{ model.probe.template_version }}</code>
+                    </span>
+                    <span v-if="model.probe?.retry_after_seconds !== undefined" class="probe-metadata">
+                      <span>retry_after</span>
+                      <code>{{ model.probe.retry_after_seconds }} 秒后可重试</code>
+                    </span>
                   </div>
                 </td>
                 <td data-label="协议">
@@ -1141,7 +1225,7 @@ function capabilityLabel(value: string): string {
                     type="button"
                     :disabled="probingModels.has(model.id) || discoveryRunning"
                     :aria-label="probeButtonLabel(model)"
-                    @click="probeModel(model)"
+                    @click="requestProbe(model)"
                   >
                     <FlaskConical :size="14" aria-hidden="true" />
                     {{ probingModels.has(model.id) ? '测活中' : model.probe ? '重试' : '测活' }}
@@ -1151,6 +1235,46 @@ function capabilityLabel(value: string): string {
             </tbody>
           </table>
         </div>
+      </div>
+    </ModalDialog>
+
+    <ModalDialog
+      v-if="probeConfirmation && selectedKey && upstreamResource"
+      title="确认模型测活"
+      close-label="取消模型测活"
+      @close="probeConfirmation = null"
+    >
+      <div class="probe-confirmation">
+        <p class="probe-confirmation-lead">这是一次可能计费的手动请求，请确认调用范围。</p>
+        <dl class="probe-confirmation-details">
+          <div>
+            <dt>当前上游</dt>
+            <dd>{{ upstreamResource.name }}<code>{{ upstreamResource.base_url }}</code></dd>
+          </div>
+          <div>
+            <dt>Key</dt>
+            <dd>{{ selectedKey.name }}<code>{{ selectedKey.id }}</code></dd>
+          </div>
+          <div>
+            <dt>模型</dt>
+            <dd><code>{{ probeConfirmation.model.id }}</code></dd>
+          </div>
+          <div>
+            <dt>协议</dt>
+            <dd>{{ probeProtocolLabel(probeConfirmation.protocol) }}</dd>
+          </div>
+        </dl>
+        <div class="probe-cost-notice" role="note">
+          <FlaskConical :size="17" aria-hidden="true" />
+          <div>
+            <strong>本次请求可能产生真实费用</strong>
+            <span>服务端将生成随机自然语言任务；输入约 20-50 Token / 输出最多 64 Token。</span>
+          </div>
+        </div>
+        <footer class="probe-confirmation-actions">
+          <button class="secondary-button" type="button" @click="probeConfirmation = null">取消</button>
+          <button class="primary-button" type="button" @click="confirmProbe">确认测活</button>
+        </footer>
       </div>
     </ModalDialog>
   </section>
@@ -1784,6 +1908,46 @@ function capabilityLabel(value: string): string {
 .probe-result strong.is-model_unavailable,
 .probe-result strong.is-invalid_response { color: #b91c1c; }
 .probe-result span { color: var(--muted); font-size: 10px; }
+
+.probe-metadata {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 5px;
+  line-height: 1.25;
+}
+
+.probe-metadata span { color: var(--muted); }
+.probe-metadata code { overflow-wrap: anywhere; color: var(--muted); font-size: 10px; }
+
+.probe-confirmation {
+  display: grid;
+  gap: 14px;
+}
+
+.probe-confirmation-lead { margin: 0; color: var(--ink); font-size: 13px; }
+
+.probe-confirmation-details {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.probe-confirmation-details > div {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+}
+
+.probe-confirmation-details dt { color: var(--muted); font-size: 11px; }
+.probe-confirmation-details dd { display: grid; gap: 2px; min-width: 0; margin: 0; color: var(--ink); font-size: 12px; }
+.probe-confirmation-details code { overflow-wrap: anywhere; color: var(--muted); font-size: 10px; }
+
+.probe-confirmation-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
 
 .model-probe-button {
   min-width: 72px;
