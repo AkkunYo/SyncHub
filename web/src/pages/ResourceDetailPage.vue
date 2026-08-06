@@ -564,7 +564,9 @@ function capabilityLabel(value: string): string {
         <header class="panel-toolbar">
           <div>
             <h2>Key 与模型</h2>
-            <span>{{ displayedKeys.length }} 个 Key</span>
+            <span v-if="keysState === 'loading'">正在加载</span>
+            <span v-else-if="keysState === 'error'">加载失败</span>
+            <span v-else>{{ displayedKeys.length }} 个 Key</span>
           </div>
           <div class="panel-actions">
             <button
@@ -611,7 +613,7 @@ function capabilityLabel(value: string): string {
           </button>
         </div>
 
-        <div v-if="keysState !== 'loading' && !displayedKeys.length" class="detail-empty">
+        <div v-if="keysState === 'ready' && !displayedKeys.length" class="detail-empty">
           <KeyRound :size="22" aria-hidden="true" />
           <p>{{ upstreamResource?.type === 'newapi' ? '暂无已发现的用户 Key' : '尚未配置通用 Key' }}</p>
         </div>
