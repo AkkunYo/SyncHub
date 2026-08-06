@@ -139,7 +139,8 @@ const retryableFailureCount = computed(() =>
   results.value.flatMap((result) => result.targets).filter((target) => target.status === 'failed' && target.retryable).length,
 )
 const setupSteps = computed(() => [
-  { label: '配置目标实例', complete: verifiedTargetIds.value.size > 0 },
+  { label: '配置目标实例', complete: store.targets.length > 0 },
+  { label: '验证目标实例', complete: verifiedTargetIds.value.size > 0 },
   { label: '配置上游连接', complete: store.upstreams.length > 0 },
   { label: '刷新来源资产', complete: rows.value.length > 0 },
   { label: '选择资产并同步', complete: syncedCount.value > 0 },

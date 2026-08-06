@@ -600,7 +600,6 @@ async function validateConnection(): Promise<void> {
   } catch (error) {
     connectionError.value = safeErrorMessage(error)
     connectionState.value = 'failed'
-    if (props.kind === 'target') store.setTargetValidation(resource.id, 'failed')
   }
 }
 
@@ -982,8 +981,8 @@ function capabilityLabel(value: string): string {
             <strong>{{ connectionState === 'verified' ? '连接验证通过' : connectionState === 'failed' ? '连接验证失败' : connectionState === 'testing' ? '正在验证连接' : '连接尚未验证' }}</strong>
             <span v-if="connectionResult">{{ connectionResult.resource_count }} 个渠道</span>
             <span v-if="targetValidatedAt">{{ targetValidatedAt }}</span>
-            <span v-else-if="connectionError" class="error-text">{{ connectionError }}</span>
-            <span v-else-if="!connectionResult">管理员凭证</span>
+            <span v-if="connectionError" class="error-text">{{ connectionError }}</span>
+            <span v-else-if="!connectionResult && !targetValidatedAt">管理员凭证</span>
           </div>
           <button class="secondary-button" type="button" :disabled="connectionState === 'testing'" aria-label="验证目标连接" @click="validateConnection">
             <RefreshCw :class="{ spin: connectionState === 'testing' }" :size="15" aria-hidden="true" />
