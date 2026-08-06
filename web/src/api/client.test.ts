@@ -10,6 +10,54 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe('SyncHub API client', () => {
+  it('loads task history using the list contract', async () => {
+    const data = {
+      tasks: [{
+        task_id: 'task-42',
+        type: 'sync',
+        scope: 'source-a -> target-a',
+        status: 'succeeded',
+        completed: true,
+        started_at: '2026-08-06T14:20:00Z',
+        completed_at: '2026-08-06T14:20:04Z',
+        summary: { total: 1, succeeded: 1, failed: 0 },
+      }],
+      meta: { total: 1, capacity: 50 },
+    }
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ success: true, data, request_id: 'req-tasks' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(api.getTasks()).resolves.toEqual(data)
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/tasks', expect.objectContaining({ method: 'GET' }))
+  })
+
+  it('loads a task detail and preserves a task_not_found API error', async () => {
+    const data = {
+      task_id: 'task-42',
+      type: 'sync',
+      scope: 'source-a -> target-a',
+      status: 'failed',
+      completed: true,
+      started_at: '2026-08-06T14:20:00Z',
+      completed_at: '2026-08-06T14:20:04Z',
+      summary: { total: 1, succeeded: 0, failed: 1 },
+      items: [{ item_id: 'asset-1', status: 'failed', error_code: 'timeout' }],
+    }
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ success: true, data, request_id: 'req-task' }))
+      .mockResolvedValueOnce(jsonResponse({
+        success: false,
+        error: { code: 'task_not_found', message: '任务不存在' },
+        request_id: 'req-task-missing',
+      }, 404))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(api.getTask('task-42')).resolves.toEqual(data)
+    await expect(api.getTask('missing')).rejects.toMatchObject({ code: 'task_not_found', status: 404 })
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/v1/tasks/task-42', expect.objectContaining({ method: 'GET' }))
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/v1/tasks/missing', expect.objectContaining({ method: 'GET' }))
+  })
+
   it('only calls the versioned SyncHub API and unwraps a success envelope', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({

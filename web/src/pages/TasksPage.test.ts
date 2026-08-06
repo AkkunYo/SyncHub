@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 
 import TasksPage, { type TaskRecord } from './TasksPage.vue'
+import { api } from '@/api/client'
 
 const routerLinkStub = {
   props: ['to'],
@@ -10,6 +11,43 @@ const routerLinkStub = {
 }
 
 describe('TasksPage workflow states', () => {
+  it('loads task history automatically and links rows to task details', async () => {
+    vi.spyOn(api, 'getTasks').mockResolvedValue({
+      tasks: [{
+        task_id: 'task-auto',
+        type: 'sync',
+        scope: 'source-a -> target-a',
+        status: 'succeeded',
+        completed: true,
+        started_at: '2026-08-06T14:20:00Z',
+        completed_at: '2026-08-06T14:20:04Z',
+        summary: { total: 1, succeeded: 1, failed: 0 },
+      }],
+      meta: { total: 1, capacity: 50 },
+    })
+
+    render(TasksPage, { global: { stubs: { RouterLink: routerLinkStub } } })
+
+    expect(await screen.findByText('资产同步')).toBeInTheDocument()
+    expect(screen.getByText('task-auto')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '资产同步' })).toHaveAttribute('href', '/tasks/task-auto')
+  })
+
+  it('shows an automatic load error and retries the request', async () => {
+    const getTasks = vi.spyOn(api, 'getTasks')
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce({ tasks: [], meta: { total: 0, capacity: 50 } })
+    const user = userEvent.setup()
+
+    render(TasksPage, { global: { stubs: { RouterLink: routerLinkStub } } })
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('任务记录加载失败')
+    await user.click(within(alert).getByRole('button', { name: '重试任务记录' }))
+    await screen.findByText('暂无任务记录')
+    expect(getTasks).toHaveBeenCalledTimes(2)
+  })
+
   it('renders the loading state without exposing an empty table', () => {
     render(TasksPage, { props: { loading: true } })
 
