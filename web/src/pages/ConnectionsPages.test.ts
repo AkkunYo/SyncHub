@@ -563,6 +563,35 @@ describe('Target instances workspace', () => {
     expect(within(row).getByText(/supports_proxy_endpoint/)).toBeInTheDocument()
   })
 
+  it('preserves the persisted target summary when a list connection test fails', async () => {
+    const validatedConfig = structuredClone(config)
+    const persistedTarget = {
+      ...validatedConfig.targets[1]!,
+      validation_status: 'verified' as const,
+      validated_at: '2026-08-06T10:00:00Z',
+      validation_capabilities: {
+        platform: 'cliproxyapi',
+        providers: { openai: { modes: ['static_key'] } },
+      },
+    }
+    validatedConfig.targets[1] = persistedTarget
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      failure('upstream_failure', '目标管理端点不可达'),
+    ))
+    const user = userEvent.setup()
+    const { store } = await renderPage(TargetsPage, '/targets', validatedConfig)
+
+    const row = screen.getByRole('row', { name: /备用 CPA/ })
+    expect(within(row).getByText('验证通过')).toBeInTheDocument()
+    expect(within(row).getByText(/平台: cliproxyapi/)).toBeInTheDocument()
+    await user.click(within(row).getByRole('button', { name: '验证 备用 CPA 连接' }))
+
+    expect(await within(row).findByText('验证失败')).toBeInTheDocument()
+    expect(within(row).getByText('目标管理端点不可达')).toBeInTheDocument()
+    expect(store.targets.find((target) => target.id === persistedTarget.id)).toMatchObject(persistedTarget)
+    expect(within(row).getByText(/平台: cliproxyapi/)).toBeInTheDocument()
+  })
+
   it('shows failed target validation and retries edits and confirmed deletion', async () => {
     let updateAttempts = 0
     let deleteAttempts = 0
