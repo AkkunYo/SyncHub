@@ -75,6 +75,44 @@ func TestTargetCredentialUpdateInvalidatesValidation(t *testing.T) {
 	}
 }
 
+func TestTargetBaseURLUpdateInvalidatesValidationWhileNameUpdatePreservesIt(t *testing.T) {
+	env := newTestEnvironment()
+	originalValidatedAt := *env.store.cfg.Targets[0].ValidatedAt
+
+	recorder, _ := request(t, env.router(t), http.MethodPut, "/api/v1/targets/target-a", `{"name":"Renamed","base_url":"https://target.example.com"}`, "application/json")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("name update status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	preserved := env.store.cfg.Targets[0]
+	if preserved.ValidationStatus != config.TargetValidationVerified || preserved.ValidatedAt == nil || !preserved.ValidatedAt.Equal(originalValidatedAt) {
+		t.Fatalf("name update invalidated validation: %#v", preserved)
+	}
+
+	recorder, _ = request(t, env.router(t), http.MethodPut, "/api/v1/targets/target-a", `{"name":"Renamed","base_url":"https://replacement.example.com"}`, "application/json")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("base URL update status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	invalidated := env.store.cfg.Targets[0]
+	if invalidated.ValidationStatus != config.TargetValidationUnverified || invalidated.ValidatedAt != nil || len(invalidated.ValidationCapabilities.Providers) != 0 {
+		t.Fatalf("base URL update retained validation: %#v", invalidated)
+	}
+}
+
+func TestCreatedTargetStartsUnverified(t *testing.T) {
+	env := newTestEnvironment()
+	recorder, envelope := request(t, env.router(t), http.MethodPost, "/api/v1/targets", `{"id":"target-new","name":"New","type":"newapi","base_url":"https://new.example.com","access_token":"write-only-secret"}`, "application/json")
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if dataObject(t, envelope)["validation_status"] != string(config.TargetValidationUnverified) || strings.Contains(recorder.Body.String(), "write-only-secret") {
+		t.Fatalf("created target=%s", recorder.Body.String())
+	}
+	target, ok := targetByID(env.store.cfg, "target-new")
+	if !ok || target.ValidationStatus != config.TargetValidationUnverified || target.ValidatedAt != nil {
+		t.Fatalf("stored target=%#v found=%v", target, ok)
+	}
+}
+
 func TestFailedTargetConnectionTestDoesNotPersistValidation(t *testing.T) {
 	env := newTestEnvironment()
 	before := cloneConfig(env.store.cfg).Targets[0]
