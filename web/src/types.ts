@@ -3,6 +3,7 @@ export type ViewName = 'matrix' | 'channels' | 'drift' | 'settings'
 export type TargetPlatformType = 'newapi' | 'cliproxyapi'
 export type UpstreamPlatformType = 'newapi' | 'generic'
 export type PlatformType = TargetPlatformType | UpstreamPlatformType
+export type TargetValidationStatus = 'unverified' | 'verified' | 'failed'
 
 export interface AppSettings {
   host: string
@@ -18,6 +19,9 @@ export interface TargetConfig {
   type: TargetPlatformType
   base_url: string
   user_id?: number
+  validation_status?: TargetValidationStatus
+  validated_at?: string
+  validation_capabilities?: Record<string, unknown>
 }
 
 export interface UpstreamConfig {
@@ -70,7 +74,9 @@ export interface ConnectionTestResult {
   authenticated: boolean
   authorized: boolean
   resource_count: number
-  capabilities: Record<string, boolean | number | string>
+  capabilities: Record<string, unknown>
+  validation_status?: TargetValidationStatus
+  validated_at?: string
 }
 
 export type ModelProbeProtocol = 'auto' | 'chat_completions' | 'responses' | 'completions'
@@ -305,6 +311,7 @@ export interface SyncTargetResult {
 }
 
 export interface SyncResponse {
+  task_id?: string
   units: SyncTargetResult[]
 }
 

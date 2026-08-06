@@ -81,7 +81,15 @@ it('previews a frozen three-step sync plan with target-specific settings', async
   store.initialState = 'ready'
   store.matrixState = 'ready'
   store.selectedUpstreamId = 'source-a'
-  store.matrix = structuredClone(matrix)
+  const matrixWithoutValidationSummaries = structuredClone(matrix)
+  matrixWithoutValidationSummaries.targets = matrixWithoutValidationSummaries.targets.map((target) => ({
+    id: target.id,
+    name: target.name,
+    type: target.type,
+    base_url: target.base_url,
+    user_id: target.user_id,
+  }))
+  store.matrix = matrixWithoutValidationSummaries
 
   const user = userEvent.setup()
   render(MatrixPage, {
@@ -127,10 +135,10 @@ it('previews a frozen three-step sync plan with target-specific settings', async
 
 it('keeps unverified targets out of selection and points to target validation', async () => {
   const unverifiedConfig = structuredClone(config)
-  unverifiedConfig.targets[0].validation_status = 'unverified'
+  unverifiedConfig.targets[0]!.validation_status = 'unverified'
   const matrixWithUnverified = structuredClone(matrix)
   matrixWithUnverified.targets = unverifiedConfig.targets
-  matrixWithUnverified.rows[0].cells = [
+  matrixWithUnverified.rows[0]!.cells = [
     { target_id: 'target-a', status: 'unsynced' },
     { target_id: 'target-b', status: 'unsynced' },
   ]
@@ -159,12 +167,46 @@ it('keeps unverified targets out of selection and points to target validation', 
 
   const assetCheckbox = screen.getByRole('checkbox', { name: '选择资产 Primary key' })
   expect(assetCheckbox).toBeEnabled()
+  expect(screen.getByText('1 个目标尚未验证')).toBeInTheDocument()
+  expect(screen.getByRole('link', { name: '前往目标实例验证' })).toHaveAttribute('href', '/targets')
   await user.click(assetCheckbox)
   await user.click(screen.getByRole('button', { name: '批量同步 1 个资产' }))
 
   const dialog = screen.getByRole('dialog', { name: '批量同步设置' })
-  const targetCheckbox = within(dialog).getByRole('checkbox', { name: 'Target Alpha' })
+  const targetCheckbox = within(dialog).getByRole('checkbox', { name: /Target Alpha/ })
   expect(targetCheckbox).toBeDisabled()
   expect(within(dialog).getByText(/请先验证目标实例/)).toBeInTheDocument()
   expect(within(dialog).getByRole('link', { name: '前往目标实例验证' })).toHaveAttribute('href', '/targets')
+})
+
+it('shows a reachable validation action when no target is eligible', () => {
+  const unverifiedConfig = structuredClone(config)
+  for (const target of unverifiedConfig.targets) target.validation_status = 'unverified'
+  const matrixWithoutEligibleTargets = structuredClone(matrix)
+  matrixWithoutEligibleTargets.targets = unverifiedConfig.targets
+
+  const pinia = createPinia()
+  setActivePinia(pinia)
+  const store = useConsoleStore()
+  store.config = unverifiedConfig
+  store.initialState = 'ready'
+  store.matrixState = 'ready'
+  store.selectedUpstreamId = 'source-a'
+  store.matrix = matrixWithoutEligibleTargets
+
+  render(MatrixPage, {
+    global: {
+      plugins: [pinia],
+      stubs: {
+        RouterLink: {
+          template: '<a :href="typeof to === \'string\' ? to : to.path"><slot /></a>',
+          props: ['to'],
+        },
+      },
+    },
+  })
+
+  expect(screen.getByRole('checkbox', { name: '选择资产 Primary key' })).toBeDisabled()
+  expect(screen.getByText('没有已验证的目标实例')).toBeInTheDocument()
+  expect(screen.getByRole('link', { name: '前往目标实例验证' })).toHaveAttribute('href', '/targets')
 })

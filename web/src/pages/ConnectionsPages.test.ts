@@ -550,7 +550,7 @@ describe('Target instances workspace', () => {
   it('restores target validation summaries and capabilities from sanitized config', async () => {
     const validatedConfig = structuredClone(config)
     validatedConfig.targets[0] = {
-      ...validatedConfig.targets[0],
+      ...validatedConfig.targets[0]!,
       validation_status: 'verified',
       validated_at: '2026-08-06T10:00:00Z',
       validation_capabilities: { supports_static_key: true, supports_proxy_endpoint: false },

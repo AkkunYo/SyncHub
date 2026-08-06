@@ -11,6 +11,7 @@ import type {
   SanitizedConfig,
   SyncTargetResult,
   TargetConfig,
+  TargetValidationStatus,
   UpstreamConfig,
   ViewName,
 } from '@/types'
@@ -264,6 +265,23 @@ export const useConsoleStore = defineStore('console', () => {
     if (matrix.value) await refreshMatrixAfterConfigChange()
   }
 
+  function setTargetValidation(
+    targetId: string,
+    status: TargetValidationStatus,
+    details: { validatedAt?: string; capabilities?: Record<string, unknown> } = {},
+  ): void {
+    const target = config.value?.targets.find((candidate) => candidate.id === targetId)
+    if (!target) return
+    target.validation_status = status
+    if (status === 'verified') {
+      target.validated_at = details.validatedAt
+      target.validation_capabilities = details.capabilities
+      return
+    }
+    target.validated_at = undefined
+    target.validation_capabilities = undefined
+  }
+
   async function removeTarget(targetId: string): Promise<void> {
     if (!config.value) return
     config.value.targets = config.value.targets.filter((target) => target.id !== targetId)
@@ -354,6 +372,7 @@ export const useConsoleStore = defineStore('console', () => {
     applySyncResults,
     markDriftAccepted,
     upsertTarget,
+    setTargetValidation,
     removeTarget,
     upsertUpstream,
     removeUpstream,

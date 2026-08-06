@@ -81,7 +81,61 @@ watch([searchText, typeFilter, statusFilter], ([query, type, status]) => {
 })
 
 function connectionState(id: string): ConnectionState {
-  return connectionStates.get(id) ?? { state: 'unverified' }
+  const pending = connectionStates.get(id)
+  if (pending) return pending
+  const target = store.targets.find((candidate) => candidate.id === id)
+  const state = target?.validation_status === 'verified' || target?.validation_status === 'failed'
+    ? target.validation_status
+    : 'unverified'
+  return {
+    state,
+    result: state === 'verified' && target
+      ? {
+          reachable: true,
+          authenticated: true,
+          authorized: true,
+          resource_count: 0,
+          capabilities: target.validation_capabilities ?? {},
+          validation_status: state,
+          validated_at: target.validated_at,
+        }
+      : undefined,
+  }
+}
+
+function capabilitySummary(id: string): string {
+  const target = store.targets.find((candidate) => candidate.id === id)
+  const capabilities = connectionStates.get(id)?.result?.capabilities
+    ?? target?.validation_capabilities
+  if (!capabilities) return ''
+  const summary: string[] = []
+  if (typeof capabilities.platform === 'string' && capabilities.platform) {
+    summary.push(`平台: ${capabilities.platform}`)
+  }
+  if (capabilities.providers && typeof capabilities.providers === 'object' && !Array.isArray(capabilities.providers)) {
+    const providers = Object.entries(capabilities.providers as Record<string, unknown>)
+    const modes = new Set<string>()
+    for (const [, capability] of providers) {
+      if (!capability || typeof capability !== 'object') continue
+      const candidateModes = (capability as { modes?: unknown }).modes
+      if (!Array.isArray(candidateModes)) continue
+      for (const mode of candidateModes) if (typeof mode === 'string') modes.add(mode)
+    }
+    summary.push(`${providers.length} 个 provider`)
+    if (modes.size > 0) summary.push(`模式: ${[...modes].join(', ')}`)
+  }
+  const generic = Object.entries(capabilities).flatMap(([name, value]) => {
+    if (name === 'platform' || name === 'providers' || name === 'native_auth_schema') return []
+    if (typeof value === 'boolean') return `${name}: ${value ? '支持' : '不支持'}`
+    if (typeof value === 'string' || typeof value === 'number') return `${name}: ${value}`
+    return []
+  })
+  return [...summary, ...generic].join(' · ')
+}
+
+function validatedAt(id: string): string {
+  const target = store.targets.find((candidate) => candidate.id === id)
+  return connectionStates.get(id)?.result?.validated_at ?? target?.validated_at ?? ''
 }
 
 function stateLabel(state: TestState): string {
@@ -176,9 +230,13 @@ async function saveTarget(): Promise<void> {
     formError.value = validationError
     return
   }
+  const currentTarget = isEditing.value
+    ? store.targets.find((candidate) => candidate.id === editingId.value)
+    : undefined
+  const normalizedBaseURL = form.baseUrl.trim().replace(/\/+$/, '')
   const payload: Record<string, unknown> = {
     name: form.name.trim(),
-    base_url: form.baseUrl.trim().replace(/\/+$/, ''),
+    base_url: normalizedBaseURL,
   }
   if (!isEditing.value) {
     payload.id = form.id.trim()
@@ -193,6 +251,12 @@ async function saveTarget(): Promise<void> {
     payload.management_key = form.credential
   }
 
+  const nextUserID = form.type === 'newapi' ? normalizedUserID() : undefined
+  const validationInputsChanged = !currentTarget
+    || currentTarget.base_url !== normalizedBaseURL
+    || Boolean(form.credential)
+    || (form.type === 'newapi' && currentTarget.user_id !== (nextUserID ?? undefined))
+
   form.credential = ''
   saving.value = true
   formError.value = ''
@@ -201,6 +265,8 @@ async function saveTarget(): Promise<void> {
       ? await api.updateTarget(editingId.value, payload)
       : await api.createTarget(payload)
     await store.upsertTarget(target)
+    if (target.validation_status) connectionStates.delete(target.id)
+    else if (validationInputsChanged) connectionStates.set(target.id, { state: 'unverified' })
     formOpen.value = false
     resetForm()
   } catch (error) {
@@ -235,8 +301,19 @@ async function testConnection(target: TargetConfig): Promise<void> {
   connectionStates.set(target.id, { state: 'testing' })
   try {
     const result = await api.testTargetConnection(target.id)
-    connectionStates.set(target.id, { state: 'verified', result })
+    const state = result.validation_status === 'failed'
+      || !result.reachable
+      || !result.authenticated
+      || !result.authorized
+      ? 'failed'
+      : 'verified'
+    store.setTargetValidation(target.id, state, {
+      validatedAt: result.validated_at,
+      capabilities: result.capabilities,
+    })
+    connectionStates.set(target.id, { state, result })
   } catch (error) {
+    store.setTargetValidation(target.id, 'failed')
     connectionStates.set(target.id, { state: 'failed', message: safeErrorMessage(error) })
   }
 }
@@ -347,7 +424,13 @@ async function testConnection(target: TargetConfig): Promise<void> {
                     {{ stateLabel(connectionState(target.id).state) }}
                   </span>
                   <small v-if="connectionState(target.id).result">
-                    {{ connectionState(target.id).result?.resource_count }} 个渠道
+                    <template v-if="connectionState(target.id).result!.resource_count > 0">
+                      {{ connectionState(target.id).result!.resource_count }} 个渠道
+                    </template>
+                    <template v-else-if="validatedAt(target.id)">最近验证 {{ validatedAt(target.id) }}</template>
+                  </small>
+                  <small v-if="capabilitySummary(target.id)" class="capability-summary">
+                    {{ capabilitySummary(target.id) }}
                   </small>
                   <small v-else-if="connectionState(target.id).message" class="error-text">
                     {{ connectionState(target.id).message }}
@@ -445,6 +528,12 @@ async function testConnection(target: TargetConfig): Promise<void> {
         </div>
 
         <p v-if="formError" class="drawer-error" role="alert">{{ formError }}</p>
+
+        <section v-if="isEditing" class="target-validation-summary" aria-label="目标验证详情">
+          <strong>{{ stateLabel(connectionState(editingId).state) }}</strong>
+          <span v-if="validatedAt(editingId)">{{ validatedAt(editingId) }}</span>
+          <small v-if="capabilitySummary(editingId)">{{ capabilitySummary(editingId) }}</small>
+        </section>
 
         <section v-if="isEditing" class="danger-zone">
           <strong>删除实例</strong>
@@ -659,6 +748,11 @@ async function testConnection(target: TargetConfig): Promise<void> {
 .summary-cell span,
 .validation-cell small { color: var(--muted); font-size: 11px; }
 
+.capability-summary {
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+
 .connection-status {
   padding: 3px 7px;
   color: #52525b;
@@ -754,6 +848,22 @@ async function testConnection(target: TargetConfig): Promise<void> {
   gap: 12px;
   padding-top: 16px;
   border-top: 1px solid var(--line);
+}
+
+.target-validation-summary {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-subtle);
+}
+
+.target-validation-summary span,
+.target-validation-summary small {
+  color: var(--muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
 }
 
 .drawer-field { display: grid; gap: 6px; }

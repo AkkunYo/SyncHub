@@ -15,6 +15,7 @@ const targetA = {
   name: 'Target Alpha',
   type: 'newapi',
   base_url: 'https://target-a.invalid',
+  validation_status: 'verified',
 }
 
 const targetB = {
@@ -22,6 +23,7 @@ const targetB = {
   name: 'Target Beta',
   type: 'cliproxyapi',
   base_url: 'https://target-b.invalid',
+  validation_status: 'verified',
 }
 
 const upstream = {

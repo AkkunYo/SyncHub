@@ -23,6 +23,7 @@ import type {
   MatrixStatus,
   SyncSettings,
   SyncTargetResult,
+  TargetConfig,
 } from '@/types'
 
 const store = useConsoleStore()
@@ -39,6 +40,7 @@ const planRevisionNumber = ref(0)
 const submitting = ref(false)
 const validationError = ref('')
 const results = ref<AssetSyncResult[]>([])
+const syncTaskId = ref('')
 const assetQuery = ref('')
 const statusFilter = ref<MatrixStatus | 'all'>('all')
 const planRevision = computed(() => `draft-${planRevisionNumber.value}`)
@@ -64,7 +66,23 @@ const activeMatrix = computed(() =>
   store.matrix?.upstream_id === store.selectedUpstreamId ? store.matrix : null,
 )
 const rows = computed(() => activeMatrix.value?.rows ?? [])
-const matrixTargets = computed(() => activeMatrix.value?.targets ?? store.targets)
+const matrixTargets = computed(() => {
+  const targets = activeMatrix.value?.targets ?? store.targets
+  return targets.map((target) => {
+    const configured = store.targets.find((candidate) => candidate.id === target.id)
+    if (!configured) return target
+    return {
+      ...target,
+      validation_status: configured.validation_status,
+      validated_at: configured.validated_at,
+      validation_capabilities: configured.validation_capabilities,
+    }
+  })
+})
+const verifiedTargetIds = computed(
+  () => new Set(matrixTargets.value.filter(isTargetVerified).map((target) => target.id)),
+)
+const unverifiedTargets = computed(() => matrixTargets.value.filter((target) => !isTargetVerified(target)))
 const filteredRows = computed(() => {
   const query = assetQuery.value.trim().toLocaleLowerCase()
   return rows.value.filter((row) => {
@@ -92,7 +110,9 @@ const syncableTargetIds = computed(
   () =>
     new Set(
       selectedRows.value.flatMap((row) =>
-        row.cells.filter((cell) => cell.status === 'unsynced').map((cell) => cell.target_id),
+        row.cells
+          .filter((cell) => cell.status === 'unsynced' && verifiedTargetIds.value.has(cell.target_id))
+          .map((cell) => cell.target_id),
       ),
     ),
 )
@@ -119,7 +139,7 @@ const retryableFailureCount = computed(() =>
   results.value.flatMap((result) => result.targets).filter((target) => target.status === 'failed' && target.retryable).length,
 )
 const setupSteps = computed(() => [
-  { label: '配置目标实例', complete: store.targets.length > 0 },
+  { label: '配置目标实例', complete: verifiedTargetIds.value.size > 0 },
   { label: '配置上游连接', complete: store.upstreams.length > 0 },
   { label: '刷新来源资产', complete: rows.value.length > 0 },
   { label: '选择资产并同步', complete: syncedCount.value > 0 },
@@ -128,7 +148,19 @@ const completedSetupSteps = computed(() => setupSteps.value.filter((step) => ste
 
 function isSelectable(row: MatrixRow): boolean {
   if (!row.asset.enabled || !row.asset.secret_readable) return false
-  return row.cells.some((cell) => cell.status === 'unsynced')
+  return row.cells.some(
+    (cell) => cell.status === 'unsynced' && verifiedTargetIds.value.has(cell.target_id),
+  )
+}
+
+function isTargetVerified(target: TargetConfig): boolean {
+  return target.validation_status === 'verified'
+}
+
+function targetValidationLabel(target: TargetConfig): string {
+  if (target.validation_status === 'verified') return '已验证'
+  if (target.validation_status === 'failed') return '验证失败'
+  return '未验证'
 }
 
 function assetAvailability(row: MatrixRow): { label: string; description: string } | null {
@@ -180,7 +212,8 @@ function collectSubmittedRows(targetIds: readonly string[]): SubmittedRow[] {
     .map((row) => ({
       row,
       targetIds: targetIds.filter((targetId) =>
-        row.cells.some((cell) => cell.target_id === targetId && cell.status === 'unsynced'),
+        verifiedTargetIds.value.has(targetId)
+        && row.cells.some((cell) => cell.target_id === targetId && cell.status === 'unsynced'),
       ),
     }))
     .filter(({ targetIds: ids }) => ids.length > 0)
@@ -236,6 +269,7 @@ function openSync(): void {
   for (const target of matrixTargets.value) targetOverrides[target.id] = { ...defaults }
   validationError.value = ''
   results.value = []
+  syncTaskId.value = ''
   syncOpen.value = true
   refreshDraftPlan()
 }
@@ -286,6 +320,10 @@ async function submitSync(): Promise<void> {
   }
   if (selectedTargets.value.length === 0) {
     validationError.value = '至少选择一个目标实例'
+    return
+  }
+  if (selectedTargets.value.some((targetId) => !verifiedTargetIds.value.has(targetId))) {
+    validationError.value = '请先验证目标实例再同步'
     return
   }
   const submittedRows = collectSubmittedRows(selectedTargets.value)
@@ -344,6 +382,7 @@ async function runSync(
         upstream_id: submittedUpstreamId,
         units,
       })
+      if (response.task_id) syncTaskId.value = response.task_id
       const byTuple = new Map(response.units.map((unit) => [`${unit.asset_id}\u0000${unit.target_id}`, unit]))
       const grouped = new Map<string, AssetSyncResult>()
       for (const item of submittedPlan) {
@@ -495,6 +534,13 @@ function matrixStatusLabel(status: string): string {
         <div :class="{ 'metric-alert': attentionCount > 0 }"><strong>{{ attentionCount }}</strong><span>需处理</span></div>
       </div>
 
+      <div v-if="store.targets.length > 0 && unverifiedTargets.length" class="target-validation-banner" role="status">
+        <span>
+          {{ verifiedTargetIds.size > 0 ? `${unverifiedTargets.length} 个目标尚未验证` : '没有已验证的目标实例' }}
+        </span>
+        <RouterLink to="/targets">前往目标实例验证</RouterLink>
+      </div>
+
       <TableSkeleton
         v-if="isInitialLoading"
         :label="matrixStatusLabel(store.matrixState)"
@@ -589,7 +635,14 @@ function matrixStatusLabel(status: string): string {
                 </th>
                 <th class="asset-cell">资产</th>
                 <th class="provider-cell">供应商 / 形态</th>
-                <th v-for="target in matrixTargets" :key="target.id" class="target-cell">{{ target.name }}</th>
+                <th v-for="target in matrixTargets" :key="target.id" class="target-cell">
+                  <span class="target-heading">
+                    <span>{{ target.name }}</span>
+                    <small :class="{ 'is-unverified': !isTargetVerified(target) }">
+                      {{ targetValidationLabel(target) }}
+                    </small>
+                  </span>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -691,11 +744,17 @@ function matrixStatusLabel(status: string): string {
               v-model="selectedTargets"
               type="checkbox"
               :value="target.id"
-              :disabled="!syncableTargetIds.has(target.id)"
+              :disabled="!syncableTargetIds.has(target.id) || !isTargetVerified(target)"
             />
             <span>{{ target.name }}</span>
+            <small v-if="!isTargetVerified(target)">{{ targetValidationLabel(target) }}</small>
           </label>
         </fieldset>
+
+        <p v-if="unverifiedTargets.length" class="target-validation-notice">
+          请先验证目标实例，未验证目标不会进入同步计划。
+          <RouterLink to="/targets">前往目标实例验证</RouterLink>
+        </p>
 
         <section v-if="selectedTargets.length" class="target-overrides" aria-label="逐目标策略">
           <header>
@@ -740,6 +799,9 @@ function matrixStatusLabel(status: string): string {
 
         <section v-if="results.length" class="result-section" aria-live="polite">
           <h3>{{ resultSummary }}</h3>
+          <RouterLink v-if="syncTaskId" class="secondary-button task-detail-link" :to="`/tasks/${encodeURIComponent(syncTaskId)}`">
+            查看任务详情
+          </RouterLink>
           <div v-for="result in results" :key="result.assetId" class="result-group">
             <strong>{{ result.assetName }}</strong>
             <ul class="result-list">
@@ -1070,6 +1132,67 @@ function matrixStatusLabel(status: string): string {
 .sync-plan-meta b {
   color: #047857;
   font-size: 11px;
+}
+
+.target-heading {
+  display: grid;
+  gap: 2px;
+}
+
+.target-heading small,
+.check-row small {
+  color: #047857;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.target-heading small.is-unverified,
+.check-row small {
+  color: #b45309;
+}
+
+.target-validation-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+  padding: 9px 10px;
+  border: 1px solid #fcd34d;
+  border-radius: 6px;
+  color: #92400e;
+  background: #fffbeb;
+  font-size: 12px;
+}
+
+.target-validation-banner {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border-bottom: 1px solid #fcd34d;
+  color: #92400e;
+  background: #fffbeb;
+  font-size: 12px;
+}
+
+.target-validation-banner a {
+  color: #1d4ed8;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.target-validation-notice a {
+  color: #1d4ed8;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.task-detail-link {
+  width: fit-content;
+  margin-bottom: 8px;
 }
 
 @media (max-width: 620px) {
