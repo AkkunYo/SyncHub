@@ -128,8 +128,18 @@ func (s *Service) ListKeys(ctx context.Context, upstream config.UpstreamConfig, 
 }
 
 func (s *Service) listGenericKeys(upstream config.UpstreamConfig) []Key {
-	result := make([]Key, 0, len(upstream.Keys))
-	for _, configured := range upstream.Keys {
+	configuredKeys := upstream.Keys
+	// Store validation normally migrates the legacy api_key field into Keys,
+	// but callers may hold an older or in-memory config snapshot. Keep the
+	// catalog view aligned with the adapter resolver's default-key behavior.
+	if len(configuredKeys) == 0 && strings.TrimSpace(upstream.APIKey) != "" {
+		configuredKeys = []config.GenericKeyConfig{{
+			ID: config.DefaultGenericKeyID, Name: upstream.Name,
+			APIKey: upstream.APIKey, Enabled: true,
+		}}
+	}
+	result := make([]Key, 0, len(configuredKeys))
+	for _, configured := range configuredKeys {
 		keyID := strings.TrimSpace(configured.ID)
 		key := resourceKey{upstreamID: upstream.ID, keyID: keyID}
 		s.ensureConfiguredSnapshot(key, configured.Models)
