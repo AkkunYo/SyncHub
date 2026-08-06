@@ -485,7 +485,12 @@ func (s *server) matrix(c *gin.Context) {
 	targets := make([]matrixTarget, len(cfg.Targets))
 	capabilities := make(map[string]platform.TargetCapabilities, len(cfg.Targets))
 	for i, target := range cfg.Targets {
-		targets[i] = matrixTarget{ID: target.ID, Name: target.Name, Type: target.Type, BaseURL: target.BaseURL}
+		public := redactTarget(target)
+		targets[i] = matrixTarget{
+			ID: public.ID, Name: public.Name, Type: public.Type, BaseURL: public.BaseURL,
+			ValidationStatus: public.ValidationStatus, ValidatedAt: public.ValidatedAt,
+			ValidationCapabilities: public.ValidationCapabilities,
+		}
 		if refreshed && len(snapshot.Assets) != 0 {
 			_, targetCapabilities, resolveErr := s.deps.Adapters.ResolveTarget(c.Request.Context(), target)
 			if resolveErr != nil {

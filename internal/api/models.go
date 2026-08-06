@@ -278,10 +278,13 @@ type acceptDriftRequest struct {
 }
 
 type matrixTarget struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Type    string `json:"type"`
-	BaseURL string `json:"base_url"`
+	ID                     string                        `json:"id"`
+	Name                   string                        `json:"name"`
+	Type                   string                        `json:"type"`
+	BaseURL                string                        `json:"base_url"`
+	ValidationStatus       config.TargetValidationStatus `json:"validation_status"`
+	ValidatedAt            *time.Time                    `json:"validated_at,omitempty"`
+	ValidationCapabilities *platform.TargetCapabilities  `json:"validation_capabilities,omitempty"`
 }
 
 type matrixCell struct {
