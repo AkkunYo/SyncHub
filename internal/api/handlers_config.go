@@ -122,8 +122,7 @@ func (s *server) updateTarget(c *gin.Context) {
 			return errMutationNotFound
 		}
 		target := &cfg.Targets[index]
-		connectionChanged := target.BaseURL != baseURL || request.AccessToken.set || request.ManagementKey.set || request.APIKey.set ||
-			(request.UserID.set && target.UserID != request.UserID.value)
+		previousConnection := *target
 		if err := applyTargetCredentials(target, request.AccessToken, request.ManagementKey, request.APIKey); err != nil {
 			return err
 		}
@@ -132,7 +131,7 @@ func (s *server) updateTarget(c *gin.Context) {
 		}
 		target.Name = name
 		target.BaseURL = baseURL
-		if connectionChanged {
+		if !sameTargetConnection(*target, previousConnection) {
 			invalidateTargetValidation(target)
 		}
 		updated = *target

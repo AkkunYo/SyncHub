@@ -362,6 +362,16 @@ func (s *server) batchSync(c *gin.Context) {
 	unlock := s.lockTuples(keys)
 	defer unlock()
 
+	currentConfig := s.deps.Config.Snapshot()
+	for i, unit := range normalized {
+		currentTarget, exists := targetByID(currentConfig, unit.TargetID)
+		if !exists {
+			targetConfigs[i] = config.TargetConfig{ID: unit.TargetID}
+			continue
+		}
+		targetConfigs[i] = currentTarget
+	}
+
 	result := syncservice.MultiResult{Units: make([]syncservice.UnitResult, len(normalized))}
 	hasVerifiedTarget := false
 	for i, unit := range normalized {
