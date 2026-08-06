@@ -20,6 +20,26 @@ import (
 
 const catalogTestSecret = "catalog-test-secret"
 
+func TestListKeysExposesLegacyGenericAPIKeyAsDefaultKey(t *testing.T) {
+	store := newCatalogStore(config.Config{
+		App: config.Default().App,
+		Upstreams: []config.UpstreamConfig{{
+			ID: "source-legacy", Name: "Legacy", Type: "generic",
+			BaseURL: "https://provider.example.com", APIKey: "legacy-secret",
+		}},
+	})
+	service := NewService(store, nil, &catalogProber{})
+
+	keys, err := service.ListKeys(context.Background(), store.cfg.Upstreams[0], nil)
+	if err != nil {
+		t.Fatalf("ListKeys() error = %v", err)
+	}
+	if len(keys) != 1 || keys[0].ID != config.DefaultGenericKeyID || keys[0].Name != "Legacy" ||
+		!keys[0].Enabled || !keys[0].CredentialPresent || keys[0].assetID != "source-legacy:endpoint" {
+		t.Fatalf("legacy keys = %#v", keys)
+	}
+}
+
 func TestGenericDiscoveryPersistsCompleteSnapshotsAndRetainsThemOnFailure(t *testing.T) {
 	var responseMode atomic.Int32
 	var requests atomic.Int32
