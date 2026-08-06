@@ -253,6 +253,22 @@ watch([selectedTargets, models, group, priority, weight, targetOverrides], () =>
   if (syncOpen.value && !submitting.value) refreshDraftPlan()
 }, { deep: true })
 
+watch([group, priority, weight], ([nextGroup, nextPriority, nextWeight]) => {
+  if (!syncOpen.value || submitting.value) return
+  const nextSettings = {
+    group: String(nextGroup).trim() || 'default',
+    priority: Number.isFinite(Number(nextPriority)) ? Number(nextPriority) : 0,
+    weight: Number.isFinite(Number(nextWeight)) ? Number(nextWeight) : 100,
+  }
+  for (const targetId of selectedTargets.value) {
+    const override = targetOverrides[targetId]
+    if (!override) continue
+    override.group = nextSettings.group
+    override.priority = nextSettings.priority
+    override.weight = nextSettings.weight
+  }
+}, { flush: 'sync' })
+
 function failedTarget(targetId: string, code = 'request_failed'): SyncTargetResult {
   return {
     target_id: targetId,
