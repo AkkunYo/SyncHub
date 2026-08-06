@@ -228,6 +228,31 @@ describe('Connection resource details', () => {
     expect(await screen.findByText('服务端权威 Key')).toBeInTheDocument()
   })
 
+  it('renders the backend Key summary contract without requiring a models array', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(envelope({
+      keys: [{
+        id: 'server-key',
+        name: '真实摘要 Key',
+        enabled: true,
+        source: 'manual',
+        credential_present: true,
+        model_count: 3,
+        discovery_status: 'succeeded',
+        snapshot_status: 'ready',
+        discovered_at: '2026-08-06T11:50:00Z',
+      }],
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await renderDetail('upstream')
+
+    const row = await screen.findByRole('row', { name: /真实摘要 Key/ })
+    expect(within(row).getByText('3 个模型')).toBeInTheDocument()
+    expect(within(row).getByText('已发现')).toBeInTheDocument()
+    expect(within(row).getByText('凭证已配置')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
   it('does not present a failed initial Key request as an authoritative empty list', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       failure('upstream_failure', 'Key 列表暂时不可用'),
