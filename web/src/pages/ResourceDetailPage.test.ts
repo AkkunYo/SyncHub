@@ -26,6 +26,16 @@ const genericSource = {
   sync_mappings: [],
 }
 
+const newAPISource = {
+  id: 'source-user',
+  name: 'New API 用户源',
+  type: 'newapi',
+  base_url: 'https://source.example.com',
+  user_id: 17,
+  keys: [],
+  sync_mappings: [],
+}
+
 const target = {
   id: 'target-main',
   name: '生产 New API',
@@ -43,7 +53,7 @@ const config = {
     sync_concurrency: 4,
   },
   targets: [target],
-  upstreams: [genericSource],
+  upstreams: [genericSource, newAPISource],
 } as SanitizedConfig
 
 function envelope(data: unknown, status = 200): Response {
@@ -60,7 +70,7 @@ function failure(code: string, message: string, status = 502): Response {
   )
 }
 
-async function renderDetail(kind: 'upstream' | 'target') {
+async function renderDetail(kind: 'upstream' | 'target', upstreamId = 'source-generic') {
   const pinia = createPinia()
   const router = createRouter({
     history: createMemoryHistory(),
@@ -86,7 +96,7 @@ async function renderDetail(kind: 'upstream' | 'target') {
   const store = useConsoleStore(pinia)
   store.config = structuredClone(config)
   store.initialState = 'ready'
-  await router.push(kind === 'upstream' ? '/upstreams/source-generic' : '/targets/target-main')
+  await router.push(kind === 'upstream' ? `/upstreams/${upstreamId}` : '/targets/target-main')
   await router.isReady()
   return { ...render(ResourceDetailPage, {
     props: kind === 'upstream'
@@ -337,5 +347,46 @@ describe('Connection resource details', () => {
     expect(within(modal).getByText('部分模型刷新未完成：请求受限')).toBeInTheDocument()
     expect(document.body.textContent).not.toContain('sk-primary')
     expect(document.body.textContent).not.toContain('请把')
+  })
+
+  it('loads the New API group snapshot and retries a failed request', async () => {
+    let groupRequests = 0
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path === '/api/v1/upstreams/source-user/keys') return envelope({ keys: [] })
+      expect(path).toBe('/api/v1/upstreams/source-user/groups')
+      groupRequests += 1
+      if (groupRequests === 1) return failure('upstream_failure', '分组快照暂时不可用')
+      return envelope({
+        upstream_id: 'source-user',
+        refreshed: true,
+        groups: [{
+          name: 'vip',
+          description: '高优先级分组',
+          ratio: 1.5,
+          ratio_known: true,
+          models: ['gpt-4.1', 'gpt-4o-mini'],
+          model_count: 2,
+          models_verified: true,
+          auto: false,
+        }],
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+    await renderDetail('upstream', 'source-user')
+
+    await user.click(screen.getByRole('tab', { name: 'New API 分组' }))
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('分组快照暂时不可用')
+    await user.click(within(alert).getByRole('button', { name: '重试分组快照' }))
+
+    const table = await screen.findByRole('table', { name: 'New API 分组列表' })
+    const row = within(table).getByRole('row', { name: /vip/ })
+    expect(within(row).getByText('高优先级分组')).toBeInTheDocument()
+    expect(within(row).getByText('1.5x')).toBeInTheDocument()
+    expect(within(row).getByText('2 个模型')).toBeInTheDocument()
+    expect(within(row).getByText('已确证')).toBeInTheDocument()
+    expect(groupRequests).toBe(2)
   })
 })
