@@ -86,6 +86,7 @@ const keyForm = reactive({
   enabled: true,
   models: '',
 })
+const keyFormModelsKnown = ref(false)
 
 const resourceId = computed(() => {
   const id = route.params.id
@@ -127,8 +128,32 @@ const filteredModels = computed(() => {
 })
 
 function syncKeys(nextKeys: UpstreamKey[]): void {
-  keys.value = nextKeys.map((key) => ({ ...key, models: [...key.models] }))
+  keys.value = nextKeys.map((key) => ({
+    ...key,
+    models: Array.isArray(key.models) ? [...key.models] : undefined,
+  }))
   if (upstreamResource.value) upstreamResource.value.keys = keys.value
+}
+
+function keyModelCount(key: UpstreamKey): number {
+  return key.model_count ?? key.models?.length ?? 0
+}
+
+function keyDiscoveryLabel(key: UpstreamKey): string {
+  if (key.snapshot_status === 'ready' || key.discovery_status === 'succeeded') return '已发现'
+  if (key.snapshot_status === 'empty' || key.discovery_status === 'empty') return '空列表'
+  if (key.snapshot_status === 'stale') return '已过期'
+  if (key.discovery_status === 'authentication_failed') return '鉴权失败'
+  if (key.discovery_status === 'rate_limited') return '请求受限'
+  if (key.discovery_status === 'failed') return '发现失败'
+  return '未验证'
+}
+
+function keyDiscoveryClass(key: UpstreamKey): string {
+  if (key.snapshot_status === 'ready' || key.discovery_status === 'succeeded') return 'is-on'
+  if (key.snapshot_status === 'stale' || key.discovery_status === 'rate_limited') return 'is-unverified'
+  if (key.discovery_status && !['', 'empty'].includes(key.discovery_status)) return 'is-error'
+  return 'is-unverified'
 }
 
 async function loadKeys(): Promise<void> {
@@ -233,7 +258,13 @@ async function loadModels(): Promise<void> {
       protocolByModel[model.id] ??= model.probe?.protocol ?? 'auto'
     }
     const currentKey = keys.value.find((candidate) => candidate.id === key.id)
-    if (currentKey) currentKey.models = response.models.map((model) => model.id)
+    if (currentKey) {
+      currentKey.models = response.models.map((model) => model.id)
+      currentKey.model_count = response.models.length
+      currentKey.snapshot_status = response.snapshot_status
+      currentKey.discovery_status = response.snapshot_status === 'ready' ? 'succeeded' : response.snapshot_status
+      currentKey.discovered_at = response.discovered_at
+    }
     modelsState.value = 'ready'
   } catch (error) {
     if (selectedKey.value?.id !== key.id) return
@@ -340,6 +371,7 @@ function resetKeyForm(): void {
   keyForm.apiKey = ''
   keyForm.enabled = true
   keyForm.models = ''
+  keyFormModelsKnown.value = false
   keyError.value = ''
   keyDeleteArmed.value = false
 }
@@ -355,7 +387,8 @@ function openEditKey(key: UpstreamKey): void {
   keyForm.id = key.id
   keyForm.name = key.name
   keyForm.enabled = key.enabled
-  keyForm.models = key.models.join(', ')
+  keyFormModelsKnown.value = Array.isArray(key.models)
+  keyForm.models = key.models?.join(', ') ?? ''
   keyPanelOpen.value = true
 }
 
@@ -405,8 +438,8 @@ async function saveKey(): Promise<void> {
       const input: UpstreamKeyUpdateInput = {
         name: keyForm.name.trim(),
         enabled: keyForm.enabled,
-        models,
       }
+      if (keyFormModelsKnown.value || keyForm.models.trim()) input.models = models
       if (keyForm.apiKey) input.api_key = keyForm.apiKey
       keyForm.apiKey = ''
       key = await api.updateUpstreamKey(upstream.id, editingKeyId.value, input)
@@ -681,8 +714,10 @@ function capabilityLabel(value: string): string {
                     {{ key.enabled ? '启用' : '停用' }}
                   </span>
                 </td>
-                <td data-label="模型"><strong>{{ key.models.length }} 个模型</strong></td>
-                <td data-label="发现状态"><span class="compact-status is-unverified">未验证</span></td>
+                <td data-label="模型"><strong>{{ keyModelCount(key) }} 个模型</strong></td>
+                <td data-label="发现状态">
+                  <span class="compact-status" :class="keyDiscoveryClass(key)">{{ keyDiscoveryLabel(key) }}</span>
+                </td>
                 <td data-label="凭证">{{ key.credential_present ? '凭证已配置' : '凭证缺失' }}</td>
                 <td data-label="操作">
                   <div class="key-actions">
@@ -1376,6 +1411,7 @@ function capabilityLabel(value: string): string {
 .compact-status.is-on { color: #047857; background: var(--green-soft); }
 .compact-status.is-off { color: #52525b; background: #f4f4f5; }
 .compact-status.is-unverified { color: #92400e; background: var(--amber-soft); }
+.compact-status.is-error { color: #b91c1c; background: var(--red-soft); }
 
 .detail-empty,
 .detail-state {

@@ -120,7 +120,7 @@ function enabledKeyCount(upstream: UpstreamConfig): number {
 }
 
 function modelCount(upstream: UpstreamConfig): number {
-  return upstream.keys?.reduce((total, key) => total + key.models.length, 0) ?? 0
+  return upstream.keys?.reduce((total, key) => total + (key.model_count ?? key.models?.length ?? 0), 0) ?? 0
 }
 
 function resetForm(): void {

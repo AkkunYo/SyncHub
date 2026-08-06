@@ -39,9 +39,15 @@ export interface UpstreamKey {
   id: string
   name: string
   enabled: boolean
-  models: string[]
+  models?: string[]
   credential_present: boolean
   fingerprint?: string
+  source?: string
+  source_group?: string
+  model_count?: number
+  discovery_status?: string
+  snapshot_status?: 'ready' | 'empty' | 'stale' | 'unverified'
+  discovered_at?: string
 }
 
 export interface UpstreamKeyCreateInput {
