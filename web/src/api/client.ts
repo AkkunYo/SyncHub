@@ -11,8 +11,8 @@ import type {
   RuntimeInfo,
   SanitizedConfig,
   SyncResponse,
+  TaskHistoryDetail,
   TaskHistoryListResponse,
-  TaskHistoryRecord,
   TargetConfig,
   UpstreamAsset,
   UpstreamConfig,
@@ -199,7 +199,7 @@ export const api = {
     request<MatrixData>(`/matrix?upstream_id=${encodeURIComponent(upstreamId)}`, { signal }),
   getTasks: (signal?: AbortSignal) => request<TaskHistoryListResponse>('/tasks', { signal }),
   getTask: (taskId: string, signal?: AbortSignal) =>
-    request<TaskHistoryRecord>(`/tasks/${segment(taskId)}`, { signal }),
+    request<TaskHistoryDetail>(`/tasks/${segment(taskId)}`, { signal }),
   sync: (input: Record<string, unknown>) => request<SyncResponse>('/sync', { method: 'POST', body: input }),
   reconcile: (targetId: string) =>
     request<Record<string, unknown>>(`/targets/${segment(targetId)}/reconcile`, { method: 'POST' }),

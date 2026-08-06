@@ -146,6 +146,7 @@ export interface TaskHistoryItem {
   target_id?: string
   scope?: string
   status?: string
+  code?: string
   error_code?: string
   message?: string
   [key: string]: unknown
@@ -161,6 +162,10 @@ export interface TaskHistoryRecord {
   completed_at?: string | null
   summary: TaskSummary
   items?: TaskHistoryItem[]
+}
+
+export interface TaskHistoryDetail extends TaskHistoryRecord {
+  items: TaskHistoryItem[]
 }
 
 export interface TaskHistoryListResponse {

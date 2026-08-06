@@ -4,12 +4,12 @@ import { ArrowLeft, CircleAlert, ListChecks, RotateCcw } from 'lucide-vue-next'
 import { RouterLink, useRoute } from 'vue-router'
 
 import { api, safeErrorMessage } from '@/api/client'
-import type { TaskHistoryItem, TaskHistoryRecord, TaskHistoryStatus } from '@/types'
+import type { TaskHistoryDetail, TaskHistoryItem, TaskHistoryStatus } from '@/types'
 
 type LoadState = 'loading' | 'ready' | 'error'
 
 const route = useRoute()
-const task = ref<TaskHistoryRecord | null>(null)
+const task = ref<TaskHistoryDetail | null>(null)
 const state = ref<LoadState>('loading')
 const error = ref('')
 const taskId = computed(() => {
@@ -37,7 +37,7 @@ function itemIdentifier(item: TaskHistoryItem): string {
 }
 
 function itemMessage(item: TaskHistoryItem): string {
-  return String(item.message ?? item.error_code ?? '--')
+  return String(item.message ?? item.error_code ?? item.code ?? '--')
 }
 
 function itemFields(item: TaskHistoryItem): string {

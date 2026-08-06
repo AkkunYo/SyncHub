@@ -108,7 +108,7 @@ onMounted(() => {
     </header>
 
     <section class="workspace-panel route-panel tasks-workspace" aria-label="同步任务记录" :aria-busy="displayedLoading">
-      <TableSkeleton v-if="displayedLoading" label="正在加载任务记录" :columns="4" />
+      <TableSkeleton v-if="displayedLoading" label="正在加载任务记录" :columns="5" />
       <div v-else-if="displayedError" class="task-state task-error" role="alert">
         <CircleAlert :size="24" aria-hidden="true" />
         <strong>任务记录加载失败</strong>
@@ -126,11 +126,12 @@ onMounted(() => {
               <th>范围</th>
               <th>状态</th>
               <th>开始时间</th>
+              <th>完成时间</th>
             </tr>
           </thead>
           <tbody>
             <tr v-if="displayedTasks.length === 0" class="task-empty-row">
-              <td colspan="4" class="task-empty-cell">
+              <td colspan="5" class="task-empty-cell">
                 <div class="task-empty-content">
                   <ListChecks :size="24" aria-hidden="true" />
                   <strong>暂无任务记录</strong>
@@ -154,6 +155,7 @@ onMounted(() => {
                 <small v-if="summaryLabel(task)" class="task-detail">{{ summaryLabel(task) }}</small>
               </td>
               <td data-label="开始时间">{{ task.startedAt }}</td>
+              <td data-label="完成时间">{{ task.completedAt || '--' }}</td>
             </tr>
           </tbody>
         </table>
