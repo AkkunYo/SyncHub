@@ -1,18 +1,24 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref, useId } from 'vue'
 import { X } from 'lucide-vue-next'
 
-defineProps<{
+withDefaults(defineProps<{
   title: string
   description?: string
   closeLabel?: string
-}>()
+  size?: 'regular' | 'wide'
+}>(), {
+  description: undefined,
+  closeLabel: undefined,
+  size: 'regular',
+})
 
 const emit = defineEmits<{
   close: []
 }>()
 
 const panel = ref<HTMLElement | null>(null)
+const titleId = useId()
 let previousFocus: HTMLElement | null = null
 
 const focusableSelector = [
@@ -70,14 +76,16 @@ onUnmounted(() => {
       <section
         ref="panel"
         class="modal-panel"
+        :class="{ 'modal-panel-wide': size === 'wide' }"
         role="dialog"
         aria-modal="true"
-        :aria-labelledby="`${title}-title`"
+        :aria-labelledby="titleId"
+        data-presentation="modal"
         tabindex="-1"
       >
         <header class="modal-header">
           <div>
-            <h2 :id="`${title}-title`">{{ title }}</h2>
+            <h2 :id="titleId">{{ title }}</h2>
             <p v-if="description" class="modal-description">{{ description }}</p>
           </div>
           <button

@@ -19,6 +19,7 @@ import {
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import { api, safeErrorMessage } from '@/api/client'
+import ModalDialog from '@/components/ModalDialog.vue'
 import SidePanel from '@/components/SidePanel.vue'
 import { useConsoleStore } from '@/stores/console'
 import type {
@@ -863,11 +864,11 @@ function capabilityLabel(value: string): string {
       </form>
     </SidePanel>
 
-    <SidePanel
+    <ModalDialog
       v-if="modelPanelOpen && selectedKey"
       :title="`${selectedKey.name} 模型`"
       :close-label="`关闭 ${selectedKey.name} 模型`"
-      width="wide"
+      size="wide"
       @close="closeModels"
     >
       <div class="models-panel">
@@ -1009,7 +1010,7 @@ function capabilityLabel(value: string): string {
           </table>
         </div>
       </div>
-    </SidePanel>
+    </ModalDialog>
   </section>
 </template>
 
@@ -1673,33 +1674,52 @@ function capabilityLabel(value: string): string {
 
   .models-command-bar,
   .models-filter-bar {
-    align-items: stretch;
-    flex-direction: column;
+    min-height: 44px;
   }
 
-  .models-command-bar .secondary-button,
-  .model-filter,
-  .model-filter select {
-    width: 100%;
+  .models-command-bar {
+    align-items: center;
   }
 
-  .model-filter { justify-content: space-between; }
+  .models-command-bar .secondary-button {
+    min-height: 44px;
+    flex: 0 0 auto;
+  }
+
+  .models-filter-bar {
+    align-items: center;
+    flex-direction: row;
+  }
+
+  .model-filter {
+    width: 136px;
+    flex: 0 0 136px;
+  }
+
+  .model-filter > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .model-filter select { width: 100%; }
   .model-search input,
   .model-filter select { min-height: 44px; }
 
-  .model-table-wrap { border: 0; overflow: visible; }
+  .model-table-wrap { overflow: visible; }
   .model-table,
   .model-table tbody { display: block; }
   .model-table thead { display: none; }
   .model-table tr {
     display: grid;
-    margin-bottom: 8px;
     padding: 10px;
-    border: 1px solid var(--line);
-    border-radius: 6px;
+    border-bottom: 1px solid var(--line);
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 8px 12px;
   }
+  .model-table tr:last-child { border-bottom: 0; }
   .model-table td {
     display: block;
     height: auto;

@@ -112,8 +112,7 @@ onUnmounted(() => {
   inset: 0;
   display: flex;
   justify-content: flex-end;
-  background: rgb(24 24 27 / 32%);
-  backdrop-filter: blur(1px);
+  background: rgb(24 24 27 / 18%);
 }
 
 .side-panel {
@@ -124,7 +123,7 @@ onUnmounted(() => {
   border-left: 1px solid var(--line);
   color: var(--ink);
   background: var(--surface);
-  box-shadow: -16px 0 40px rgb(15 23 42 / 14%);
+  box-shadow: -8px 0 28px rgb(15 23 42 / 12%);
   outline: none;
   animation: panel-enter 160ms ease-out;
 }

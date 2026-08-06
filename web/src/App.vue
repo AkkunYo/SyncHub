@@ -8,6 +8,8 @@ import {
   ListChecks,
   Menu,
   PanelLeftClose,
+  PanelLeftOpen,
+  RefreshCw,
   Server,
   Settings,
   X,
@@ -26,6 +28,17 @@ const mobileMenuButton = ref<HTMLButtonElement | null>(null)
 const mobileNav = ref<HTMLElement | null>(null)
 const mobileCloseButton = ref<HTMLButtonElement | null>(null)
 const mainContent = ref<HTMLElement | null>(null)
+const sidebarStorageKey = 'synchub.sidebar.collapsed'
+
+function savedSidebarState(): boolean {
+  try {
+    return window.localStorage.getItem(sidebarStorageKey) === 'true'
+  } catch {
+    return false
+  }
+}
+
+const sidebarCollapsed = ref(savedSidebarState())
 
 const navItems = [
   { id: 'sync' as const, label: '同步工作台', to: '/sync', icon: DatabaseZap },
@@ -69,6 +82,15 @@ function closeMobileNav(focusTarget: 'trigger' | 'content' = 'trigger'): void {
 function toggleMobileNav(): void {
   if (mobileNavOpen.value) closeMobileNav()
   else openMobileNav()
+}
+
+function toggleDesktopSidebar(): void {
+  sidebarCollapsed.value = !sidebarCollapsed.value
+  try {
+    window.localStorage.setItem(sidebarStorageKey, String(sidebarCollapsed.value))
+  } catch {
+    // The layout still works when browser storage is unavailable.
+  }
 }
 
 function closeMobileNavAfterNavigation(): void {
@@ -174,33 +196,58 @@ onUnmounted(() => {
     </div>
   </div>
 
-  <div v-else class="app-shell">
+  <div v-else class="app-shell" :class="{ 'sidebar-collapsed': sidebarCollapsed }">
     <header class="app-header" aria-label="SyncHub 控制台顶栏">
-      <button
-        ref="mobileMenuButton"
-        class="icon-button mobile-menu-button"
-        type="button"
-        :aria-label="mobileNavOpen ? '关闭导航' : '打开导航'"
-        :title="mobileNavOpen ? '关闭导航' : '打开导航'"
-        :aria-expanded="mobileNavOpen"
-        aria-controls="mobile-primary-navigation"
-        @click="toggleMobileNav"
-      >
-        <PanelLeftClose v-if="mobileNavOpen" :size="19" aria-hidden="true" />
-        <Menu v-else :size="19" aria-hidden="true" />
-      </button>
+      <div class="topbar-start">
+        <button
+          ref="mobileMenuButton"
+          class="header-icon-button mobile-menu-button"
+          type="button"
+          :aria-label="mobileNavOpen ? '关闭导航' : '打开导航'"
+          :title="mobileNavOpen ? '关闭导航' : '打开导航'"
+          :aria-expanded="mobileNavOpen"
+          aria-controls="mobile-primary-navigation"
+          @click="toggleMobileNav"
+        >
+          <PanelLeftClose v-if="mobileNavOpen" :size="19" aria-hidden="true" />
+          <Menu v-else :size="19" aria-hidden="true" />
+        </button>
 
-      <RouterLink class="topbar-brand" to="/sync" aria-label="SyncHub 首页">
-        <span class="brand-mark"><GitCompareArrows :size="18" aria-hidden="true" /></span>
-        <strong>SyncHub</strong>
-      </RouterLink>
+        <RouterLink class="topbar-brand" to="/sync" aria-label="SyncHub 首页">
+          <span class="brand-mark"><GitCompareArrows :size="18" aria-hidden="true" /></span>
+          <strong>SyncHub</strong>
+        </RouterLink>
+
+        <button
+          class="header-icon-button desktop-sidebar-toggle"
+          type="button"
+          :aria-label="sidebarCollapsed ? '展开导航' : '收起导航'"
+          :title="sidebarCollapsed ? '展开导航' : '收起导航'"
+          :aria-expanded="!sidebarCollapsed"
+          @click="toggleDesktopSidebar"
+        >
+          <PanelLeftOpen v-if="sidebarCollapsed" :size="18" aria-hidden="true" />
+          <PanelLeftClose v-else :size="18" aria-hidden="true" />
+        </button>
+      </div>
 
       <span class="topbar-page-title">{{ pageTitle }}</span>
 
-      <div class="topbar-health" role="status" aria-label="本地管理 API" aria-live="polite">
-        <span class="health-dot" :class="healthStatusClass" aria-hidden="true"></span>
-        <span class="health-context">本地 API</span>
-        <strong>{{ healthStatusLabel }}</strong>
+      <div class="topbar-actions">
+        <button
+          class="header-icon-button"
+          type="button"
+          aria-label="刷新控制台"
+          title="刷新控制台"
+          @click="store.loadConsole"
+        >
+          <RefreshCw :size="17" aria-hidden="true" />
+        </button>
+        <div class="topbar-health" role="status" aria-label="本地管理 API" aria-live="polite">
+          <span class="health-dot" :class="healthStatusClass" aria-hidden="true"></span>
+          <span class="health-context">本地 API</span>
+          <strong>{{ healthStatusLabel }}</strong>
+        </div>
       </div>
     </header>
 
@@ -213,6 +260,7 @@ onUnmounted(() => {
           :to="item.to"
           :class="{ active: activeNavigationId === item.id }"
           :aria-current="activeNavigationId === item.id ? 'page' : undefined"
+          :title="sidebarCollapsed ? item.label : undefined"
         >
           <component :is="item.icon" :size="18" aria-hidden="true" />
           <span>{{ item.label }}</span>

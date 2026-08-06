@@ -329,7 +329,7 @@ function matrixStatusLabel(status: string): string {
 </script>
 
 <template>
-  <section class="page" aria-labelledby="matrix-heading">
+  <section class="page sync-page" aria-labelledby="matrix-heading">
     <header class="page-header workspace-page-header">
       <div>
         <h1 id="matrix-heading" aria-label="资产矩阵">
@@ -649,7 +649,21 @@ function matrixStatusLabel(status: string): string {
 }
 
 .sync-workspace {
+  display: flex;
+  min-height: 420px;
+  flex: 1 1 auto;
+  flex-direction: column;
   box-shadow: none;
+}
+
+.sync-page {
+  display: flex;
+  min-height: calc(100svh - var(--app-header-height) - 48px);
+  flex-direction: column;
+}
+
+.sync-workspace :deep(.table-scroll) {
+  flex: 1 1 auto;
 }
 
 .sync-workspace :deep(.workspace-toolbar) {
@@ -776,6 +790,16 @@ function matrixStatusLabel(status: string): string {
 }
 
 @media (max-width: 620px) {
+  .sync-page {
+    display: block;
+    min-height: 0;
+  }
+
+  .sync-workspace {
+    display: block;
+    min-height: 0;
+  }
+
   .workspace-page-header {
     display: block;
   }

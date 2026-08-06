@@ -560,6 +560,12 @@ async function testConnection(upstream: UpstreamConfig): Promise<void> {
 </template>
 
 <style scoped>
+.connections-page {
+  display: flex;
+  min-height: calc(100svh - var(--app-header-height) - 48px);
+  flex-direction: column;
+}
+
 .connections-header > div {
   display: grid;
   gap: 2px;
@@ -572,22 +578,19 @@ async function testConnection(upstream: UpstreamConfig): Promise<void> {
 }
 
 .connection-toolbar {
-  display: flex;
-  min-height: 52px;
+  display: grid;
+  min-height: 46px;
+  grid-template-columns: minmax(260px, 1fr) minmax(180px, 220px) minmax(180px, 220px) auto;
   align-items: center;
   gap: 10px;
-  padding: 8px 10px;
-  border: 1px solid var(--line);
-  border-bottom: 0;
-  border-radius: 8px 8px 0 0;
+  padding: 0 0 12px;
   background: var(--surface);
 }
 
 .search-control {
   position: relative;
   display: flex;
-  min-width: 220px;
-  flex: 1 1 360px;
+  min-width: 0;
   align-items: center;
 }
 
@@ -602,7 +605,7 @@ async function testConnection(upstream: UpstreamConfig): Promise<void> {
 .filter-control select,
 .drawer-field input {
   width: 100%;
-  min-height: 36px;
+  min-height: 34px;
   border: 1px solid var(--line-strong);
   border-radius: 6px;
   color: var(--ink);
@@ -615,7 +618,7 @@ async function testConnection(upstream: UpstreamConfig): Promise<void> {
 
 .filter-control {
   display: flex;
-  flex: 0 1 210px;
+  min-width: 0;
   align-items: center;
   gap: 7px;
 }
@@ -633,20 +636,27 @@ async function testConnection(upstream: UpstreamConfig): Promise<void> {
 }
 
 .result-count {
-  flex: 0 0 auto;
+  justify-self: end;
   color: var(--muted);
   font-size: 12px;
+  white-space: nowrap;
 }
 
 .connection-surface {
+  display: flex;
   min-height: 260px;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: 0 0 8px 8px;
+  border-radius: 8px;
   background: var(--surface);
 }
 
 .table-wrap {
-  overflow-x: auto;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
 }
 
 .connection-table {
@@ -656,6 +666,9 @@ async function testConnection(upstream: UpstreamConfig): Promise<void> {
 }
 
 .connection-table th {
+  position: sticky;
+  z-index: 1;
+  top: 0;
   height: 38px;
   padding: 0 12px;
   border-bottom: 1px solid var(--line);
@@ -674,8 +687,8 @@ async function testConnection(upstream: UpstreamConfig): Promise<void> {
 .connection-table th:nth-child(6) { width: 116px; }
 
 .connection-table td {
-  height: 66px;
-  padding: 9px 12px;
+  height: 62px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--line);
   color: #3f3f46;
   font-size: 12px;
@@ -702,7 +715,7 @@ async function testConnection(upstream: UpstreamConfig): Promise<void> {
   overflow: hidden;
   color: var(--ink);
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 650;
   text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -799,6 +812,7 @@ async function testConnection(upstream: UpstreamConfig): Promise<void> {
 .connection-state {
   display: flex;
   min-height: 260px;
+  flex: 1 1 auto;
   align-items: center;
   justify-content: center;
   gap: 10px;
@@ -1005,19 +1019,24 @@ async function testConnection(upstream: UpstreamConfig): Promise<void> {
 
 @media (max-width: 900px) {
   .connection-toolbar {
-    flex-wrap: wrap;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
   }
 
   .search-control {
-    flex-basis: 100%;
+    grid-column: 1 / -1;
   }
 
   .filter-control {
-    flex: 1 1 180px;
+    width: 100%;
   }
 }
 
 @media (max-width: 720px) {
+  .connections-page {
+    display: block;
+    min-height: 0;
+  }
+
   .connections-header {
     align-items: flex-start;
   }
@@ -1028,17 +1047,24 @@ async function testConnection(upstream: UpstreamConfig): Promise<void> {
   }
 
   .connection-toolbar {
-    border-radius: 8px 8px 0 0;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    padding-bottom: 10px;
   }
 
   .filter-control {
     display: grid;
-    flex-basis: calc(50% - 8px);
     gap: 4px;
   }
 
   .result-count {
-    width: 100%;
+    grid-column: 1 / -1;
+    justify-self: end;
+  }
+
+  .connection-surface {
+    min-height: 0;
+    flex: none;
   }
 
   .table-wrap {
@@ -1056,10 +1082,10 @@ async function testConnection(upstream: UpstreamConfig): Promise<void> {
 
   .connection-table tr {
     display: grid;
-    grid-template-columns: 1fr auto;
-    padding: 12px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding: 14px 12px 12px;
     border-bottom: 1px solid var(--line);
-    gap: 9px 14px;
+    gap: 10px 14px;
   }
 
   .connection-table tbody tr:last-child {
@@ -1074,9 +1100,7 @@ async function testConnection(upstream: UpstreamConfig): Promise<void> {
   }
 
   .connection-table td:nth-child(1),
-  .connection-table td:nth-child(3),
-  .connection-table td:nth-child(4),
-  .connection-table td:nth-child(5) {
+  .connection-table td:nth-child(3) {
     grid-column: 1;
   }
 
@@ -1085,18 +1109,40 @@ async function testConnection(upstream: UpstreamConfig): Promise<void> {
     grid-column: 2;
   }
 
-  .connection-table td:nth-child(6) {
-    grid-row: 2 / span 4;
+  .connection-table td:nth-child(3) {
+    grid-row: 2;
+    grid-column: 1 / -1;
+  }
+
+  .connection-table td:nth-child(4) {
+    grid-row: 3;
+    grid-column: 1;
+  }
+
+  .connection-table td:nth-child(5) {
+    grid-row: 3;
     grid-column: 2;
+    justify-self: end;
+  }
+
+  .connection-table td:nth-child(6) {
+    grid-row: 4;
+    grid-column: 1 / -1;
+    margin-top: 2px;
+    padding-top: 10px;
+    border-top: 1px solid var(--line);
   }
 
   .row-actions {
     display: grid;
+    width: 100%;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
   }
 
   .row-actions .icon-button {
-    width: 40px;
-    height: 40px;
+    width: 100%;
+    height: 44px;
   }
 
   .preset-options {
