@@ -82,7 +82,11 @@ function failure(code: string, message: string, status = 502): Response {
   )
 }
 
-async function renderPage(page: typeof UpstreamsPage | typeof TargetsPage, path: string) {
+async function renderPage(
+  page: typeof UpstreamsPage | typeof TargetsPage,
+  path: string,
+  pageConfig: SanitizedConfig = config,
+) {
   const pinia = createPinia()
   const router = createRouter({
     history: createMemoryHistory(),
@@ -96,7 +100,7 @@ async function renderPage(page: typeof UpstreamsPage | typeof TargetsPage, path:
     ],
   })
   const store = useConsoleStore(pinia)
-  store.config = structuredClone(config)
+  store.config = structuredClone(pageConfig)
   store.initialState = 'ready'
   store.selectedUpstreamId = config.upstreams[0]?.id ?? ''
   store.selectedTargetId = config.targets[0]?.id ?? ''
@@ -541,6 +545,22 @@ describe('Target instances workspace', () => {
     await user.click(within(newRow).getByRole('button', { name: '验证 新 CPA 目标 连接' }))
     expect(await within(newRow).findByText('验证通过')).toBeInTheDocument()
     expect(within(newRow).getByText('12 个渠道')).toBeInTheDocument()
+  })
+
+  it('restores target validation summaries and capabilities from sanitized config', async () => {
+    const validatedConfig = structuredClone(config)
+    validatedConfig.targets[0] = {
+      ...validatedConfig.targets[0],
+      validation_status: 'verified',
+      validated_at: '2026-08-06T10:00:00Z',
+      validation_capabilities: { supports_static_key: true, supports_proxy_endpoint: false },
+    }
+    await renderPage(TargetsPage, '/targets', validatedConfig)
+
+    const row = screen.getByRole('row', { name: /生产 New API/ })
+    expect(within(row).getByText('验证通过')).toBeInTheDocument()
+    expect(within(row).getByText(/supports_static_key/)).toBeInTheDocument()
+    expect(within(row).getByText(/supports_proxy_endpoint/)).toBeInTheDocument()
   })
 
   it('shows failed target validation and retries edits and confirmed deletion', async () => {
