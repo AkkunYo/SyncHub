@@ -1,14 +1,36 @@
 package api
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	stdsync "sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/AkkunYo/SyncHub/internal/config"
 	"github.com/AkkunYo/SyncHub/internal/platform"
 	syncservice "github.com/AkkunYo/SyncHub/internal/sync"
 )
+
+type snapshotSignalStore struct {
+	*fakeConfigStore
+	armed    chan struct{}
+	observed chan struct{}
+	once     stdsync.Once
+}
+
+func (s *snapshotSignalStore) Snapshot() config.Config {
+	cfg := s.fakeConfigStore.Snapshot()
+	select {
+	case <-s.armed:
+		s.once.Do(func() { close(s.observed) })
+	default:
+	}
+	return cfg
+}
 
 func TestSyncRejectsUnverifiedTargetBeforeExternalCalls(t *testing.T) {
 	env := newTestEnvironment()
@@ -28,6 +50,82 @@ func TestSyncRejectsUnverifiedTargetBeforeExternalCalls(t *testing.T) {
 	}
 	if env.syncer.calls != 0 || len(env.resolver.upstreamCalls) != 0 {
 		t.Fatalf("sync side effects: sync=%d upstream=%d", env.syncer.calls, len(env.resolver.upstreamCalls))
+	}
+}
+
+func TestSyncRechecksTargetValidationAfterWaitingForTupleLock(t *testing.T) {
+	env := newTestEnvironment()
+	store := &snapshotSignalStore{
+		fakeConfigStore: env.store,
+		armed:           make(chan struct{}),
+		observed:        make(chan struct{}),
+	}
+	dependencies := env.dependencies()
+	dependencies.Config = store
+	router, err := NewRouter(dependencies)
+	if err != nil {
+		t.Fatalf("NewRouter() error = %v", err)
+	}
+
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var syncCalls atomic.Int32
+	env.syncer.multiFn = func(_ context.Context, _ string, _ int, request syncservice.MultiRequest) (syncservice.MultiResult, error) {
+		call := syncCalls.Add(1)
+		if call == 1 {
+			close(firstEntered)
+			<-releaseFirst
+		}
+		unit := request.Units[0]
+		return syncservice.MultiResult{Units: []syncservice.UnitResult{{
+			UnitID: unit.UnitID, AssetID: unit.Asset.ID, TargetID: unit.Target.ID,
+			Status: syncservice.TargetSynced, ChannelID: "42", EffectiveModels: []string{"gpt-4.1"},
+			ExcludedModels: []string{}, Warnings: []string{},
+		}}}, nil
+	}
+
+	performSync := func() *httptest.ResponseRecorder {
+		body := staticSyncBody("u-1", "source-a", "source-a:channel:7:key:0", "target-a", 100)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/sync", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, req)
+		return recorder
+	}
+
+	firstDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() { firstDone <- performSync() }()
+	<-firstEntered
+
+	close(store.armed)
+	secondDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() { secondDone <- performSync() }()
+	<-store.observed
+
+	updateRecorder, _ := request(t, router, http.MethodPut, "/api/v1/targets/target-a", `{"name":"Target A","base_url":"https://target.example.com","access_token":"replacement-secret"}`, "application/json")
+	if updateRecorder.Code != http.StatusOK {
+		t.Fatalf("target update status=%d body=%s", updateRecorder.Code, updateRecorder.Body.String())
+	}
+	if got := store.Snapshot().Targets[0].ValidationStatus; got != config.TargetValidationUnverified {
+		t.Fatalf("target validation after update = %q, want unverified", got)
+	}
+
+	close(releaseFirst)
+	firstRecorder := <-firstDone
+	secondRecorder := <-secondDone
+	if firstRecorder.Code != http.StatusOK || secondRecorder.Code != http.StatusOK {
+		t.Fatalf("sync statuses: first=%d second=%d", firstRecorder.Code, secondRecorder.Code)
+	}
+	var envelope map[string]any
+	if err := json.Unmarshal(secondRecorder.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode second sync response: %v", err)
+	}
+	unit := dataObject(t, envelope)["units"].([]any)[0].(map[string]any)
+	if unit["code"] != "target_unverified" || unit["status"] != string(syncservice.TargetIncompatible) {
+		t.Fatalf("second sync unit=%#v, want target_unverified", unit)
+	}
+	if got := syncCalls.Load(); got != 1 {
+		t.Fatalf("remote sync calls=%d, want only the request already in progress", got)
 	}
 }
 
@@ -72,6 +170,23 @@ func TestTargetCredentialUpdateInvalidatesValidation(t *testing.T) {
 	}
 	if env.store.cfg.Targets[0].ValidatedAt != nil || len(env.store.cfg.Targets[0].ValidationCapabilities.Providers) != 0 {
 		t.Fatalf("validation summary survived credential update: %#v", env.store.cfg.Targets[0])
+	}
+}
+
+func TestTargetCredentialUpdateWithSameValuePreservesValidation(t *testing.T) {
+	env := newTestEnvironment()
+	original := cloneConfig(env.store.cfg).Targets[0]
+
+	recorder, _ := request(t, env.router(t), http.MethodPut, "/api/v1/targets/target-a", `{"name":"Target A","base_url":"https://target.example.com","access_token":"credential-fixture-value"}`, "application/json")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	updated := env.store.cfg.Targets[0]
+	if updated.ValidationStatus != config.TargetValidationVerified || updated.ValidatedAt == nil || !updated.ValidatedAt.Equal(*original.ValidatedAt) {
+		t.Fatalf("same credential invalidated validation: before=%#v after=%#v", original, updated)
+	}
+	if updated.ValidationCapabilities.Platform != original.ValidationCapabilities.Platform || len(updated.ValidationCapabilities.Providers) != len(original.ValidationCapabilities.Providers) {
+		t.Fatalf("same credential changed validation capabilities: before=%#v after=%#v", original.ValidationCapabilities, updated.ValidationCapabilities)
 	}
 }
 
