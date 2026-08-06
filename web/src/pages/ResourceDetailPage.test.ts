@@ -414,4 +414,83 @@ describe('Connection resource details', () => {
     expect(within(row).getByText('已确证')).toBeInTheDocument()
     expect(groupRequests).toBe(2)
   })
+
+  it('requires explicit confirmation for a billable random probe and exposes per-model discovery sorting and probe metadata', async () => {
+    const modelsResponse = {
+      upstream_id: 'source-generic',
+      key_id: 'primary',
+      snapshot_status: 'ready',
+      snapshot_scope: 'runtime',
+      discovered_at: '2026-08-06T05:58:00Z',
+      models: [
+        { id: 'zeta-model', discovery_status: 'unverified', probe: null },
+        { id: 'alpha-model', discovery_status: 'discovered', probe: null },
+      ],
+    }
+    const limitedProbe = {
+      key_id: 'primary',
+      model: 'zeta-model',
+      protocol: 'responses',
+      status: 'rate_limited',
+      latency_ms: 311,
+      checked_at: '2026-08-06T06:00:00Z',
+      error_code: 'rate_limited',
+      retryable: true,
+      retry_after_seconds: 42,
+      template_version: 'v1',
+    }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const path = String(input)
+      const method = init.method ?? 'GET'
+      if (path === '/api/v1/upstreams/source-generic/keys' && method === 'GET') {
+        return envelope({ keys: genericSource.keys })
+      }
+      if (path === '/api/v1/upstreams/source-generic/keys/primary/models' && method === 'GET') {
+        return envelope(modelsResponse)
+      }
+      expect(path).toBe('/api/v1/upstreams/source-generic/keys/primary/model-probes')
+      expect(method).toBe('POST')
+      expect(JSON.parse(String(init.body))).toEqual({ model: 'zeta-model', protocol: 'responses' })
+      return envelope(limitedProbe)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+    await renderDetail('upstream')
+
+    const keyRow = await screen.findByRole('row', { name: /主 Key/ })
+    await user.click(within(keyRow).getByRole('button', { name: '查看 主 Key 模型' }))
+    const modal = await screen.findByRole('dialog', { name: '主 Key 模型' })
+
+    await user.selectOptions(within(modal).getByRole('combobox', { name: '模型发现状态' }), 'unverified')
+    expect(within(modal).getByText('zeta-model')).toBeInTheDocument()
+    expect(within(modal).queryByText('alpha-model')).not.toBeInTheDocument()
+    await user.selectOptions(within(modal).getByRole('combobox', { name: '模型排序' }), 'name_desc')
+
+    const zetaRow = within(modal).getByRole('row', { name: /zeta-model/ })
+    await user.selectOptions(within(zetaRow).getByLabelText('zeta-model 测试协议'), 'responses')
+    await user.click(within(zetaRow).getByRole('button', { name: '测活 zeta-model' }))
+
+    const confirmation = await screen.findByRole('dialog', { name: '确认模型测活' })
+    expect(within(confirmation).getByText('通用生产源')).toBeInTheDocument()
+    expect(within(confirmation).getByText('主 Key')).toBeInTheDocument()
+    expect(within(confirmation).getByText('zeta-model')).toBeInTheDocument()
+    expect(within(confirmation).getByText('Responses')).toBeInTheDocument()
+    expect(within(confirmation).getByText('本次请求可能产生真实费用')).toBeInTheDocument()
+    expect(within(confirmation).getByText(/随机自然语言任务/)).toBeInTheDocument()
+    expect(within(confirmation).getByText(/输入约 20-50 Token/)).toBeInTheDocument()
+    expect(within(confirmation).getByText(/输出最多 64 Token/)).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+
+    await user.click(within(confirmation).getByRole('button', { name: '取消' }))
+    expect(screen.queryByRole('dialog', { name: '确认模型测活' })).not.toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+
+    await user.click(within(zetaRow).getByRole('button', { name: '测活 zeta-model' }))
+    await user.click(within(await screen.findByRole('dialog', { name: '确认模型测活' })).getByRole('button', { name: '确认测活' }))
+    expect(await within(zetaRow).findByText('请求受限')).toBeInTheDocument()
+    expect(within(zetaRow).getByText('2026-08-06T06:00:00Z')).toBeInTheDocument()
+    expect(within(zetaRow).getByText('rate_limited')).toBeInTheDocument()
+    expect(within(zetaRow).getByText('模板 v1')).toBeInTheDocument()
+    expect(within(zetaRow).getByText('42 秒后可重试')).toBeInTheDocument()
+  })
 })
