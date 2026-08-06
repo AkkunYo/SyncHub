@@ -111,6 +111,38 @@ const targetResource = computed<TargetConfig | null>(() => (
     ? store.targets.find((target) => target.id === resourceId.value) ?? null
     : null
 ))
+const targetCapabilities = computed<Record<string, unknown> | null>(() => (
+  connectionResult.value?.capabilities
+    ?? targetResource.value?.validation_capabilities
+    ?? null
+))
+const targetValidatedAt = computed(() => (
+  connectionResult.value?.validated_at ?? targetResource.value?.validated_at ?? ''
+))
+const targetCapabilityPlatform = computed(() => {
+  const platform = targetCapabilities.value?.platform
+  return typeof platform === 'string' ? platform : ''
+})
+const targetProviders = computed(() => {
+  const providers = targetCapabilities.value?.providers
+  return providers && typeof providers === 'object' && !Array.isArray(providers)
+    ? Object.entries(providers as Record<string, unknown>)
+    : []
+})
+const targetProviderModes = computed(() => {
+  const modes = new Set<string>()
+  for (const [, provider] of targetProviders.value) {
+    if (!provider || typeof provider !== 'object' || Array.isArray(provider)) continue
+    const candidateModes = (provider as { modes?: unknown }).modes
+    if (!Array.isArray(candidateModes)) continue
+    for (const mode of candidateModes) if (typeof mode === 'string') modes.add(mode)
+  }
+  return [...modes]
+})
+const simpleTargetCapabilities = computed(() => Object.entries(targetCapabilities.value ?? {}).filter(
+  ([name, value]) => !['platform', 'providers', 'native_auth_schema'].includes(name)
+    && ['boolean', 'string', 'number'].includes(typeof value),
+))
 const configuredResource = computed(() => upstreamResource.value ?? targetResource.value)
 const isConfiguredKind = computed(() => props.kind === 'upstream' || props.kind === 'target')
 const resourceMissing = computed(() => isConfiguredKind.value && !configuredResource.value)
@@ -395,6 +427,11 @@ function probeButtonLabel(model: KeyModelObservation): string {
 }
 
 onMounted(() => {
+  if (targetResource.value) {
+    const status = targetResource.value.validation_status
+    connectionState.value = status === 'verified' || status === 'failed' ? status : 'unverified'
+    return
+  }
   if (!upstreamResource.value) return
   syncKeys(upstreamResource.value.keys ?? [])
   void loadKeys()
@@ -543,13 +580,27 @@ async function validateConnection(): Promise<void> {
   connectionResult.value = null
   connectionError.value = ''
   try {
-    connectionResult.value = props.kind === 'target'
+    const result = props.kind === 'target'
       ? await api.testTargetConnection(resource.id)
       : await api.testUpstreamConnection(resource.id)
-    connectionState.value = 'verified'
+    connectionResult.value = result
+    const state = result.validation_status === 'failed'
+      || !result.reachable
+      || !result.authenticated
+      || !result.authorized
+      ? 'failed'
+      : 'verified'
+    connectionState.value = state
+    if (props.kind === 'target') {
+      store.setTargetValidation(resource.id, state, {
+        validatedAt: result.validated_at,
+        capabilities: result.capabilities,
+      })
+    }
   } catch (error) {
     connectionError.value = safeErrorMessage(error)
     connectionState.value = 'failed'
+    if (props.kind === 'target') store.setTargetValidation(resource.id, 'failed')
   }
 }
 
@@ -930,8 +981,9 @@ function capabilityLabel(value: string): string {
           <div>
             <strong>{{ connectionState === 'verified' ? '连接验证通过' : connectionState === 'failed' ? '连接验证失败' : connectionState === 'testing' ? '正在验证连接' : '连接尚未验证' }}</strong>
             <span v-if="connectionResult">{{ connectionResult.resource_count }} 个渠道</span>
+            <span v-if="targetValidatedAt">{{ targetValidatedAt }}</span>
             <span v-else-if="connectionError" class="error-text">{{ connectionError }}</span>
-            <span v-else>管理员凭证</span>
+            <span v-else-if="!connectionResult">管理员凭证</span>
           </div>
           <button class="secondary-button" type="button" :disabled="connectionState === 'testing'" aria-label="验证目标连接" @click="validateConnection">
             <RefreshCw :class="{ spin: connectionState === 'testing' }" :size="15" aria-hidden="true" />
@@ -939,20 +991,34 @@ function capabilityLabel(value: string): string {
           </button>
         </div>
 
-        <div v-if="connectionResult" class="capability-grid" aria-label="目标能力">
-          <div>
+        <div v-if="targetCapabilities" class="capability-grid" role="region" aria-label="目标能力">
+          <div v-if="connectionResult">
             <span>地址可达</span>
             <strong>{{ connectionResult.reachable ? '通过' : '未通过' }}</strong>
           </div>
-          <div>
+          <div v-if="connectionResult">
             <span>凭证有效</span>
             <strong>{{ connectionResult.authenticated ? '通过' : '未通过' }}</strong>
           </div>
-          <div>
+          <div v-if="connectionResult">
             <span>管理权限</span>
             <strong>{{ connectionResult.authorized ? '通过' : '未通过' }}</strong>
           </div>
-          <div v-for="(value, capability) in connectionResult.capabilities" :key="capability">
+          <div v-if="targetCapabilityPlatform">
+            <span>平台</span>
+            <strong>{{ targetCapabilityPlatform }}</strong>
+          </div>
+          <div v-if="targetProviders.length">
+            <span>Providers</span>
+            <strong>{{ targetProviders.length }} 个 provider</strong>
+          </div>
+          <div v-if="targetProviderModes.length">
+            <span>模式</span>
+            <strong class="capability-modes">
+              <code v-for="mode in targetProviderModes" :key="mode">{{ mode }}</code>
+            </strong>
+          </div>
+          <div v-for="([capability, value]) in simpleTargetCapabilities" :key="capability">
             <span>{{ capabilityLabel(String(capability)) }}</span>
             <strong>{{ value === true ? '支持' : value === false ? '不支持' : value }}</strong>
           </div>
