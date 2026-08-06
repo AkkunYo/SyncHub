@@ -440,6 +440,23 @@ func TestSystemAcceptanceSyncReconcileAndChannelLifecycle(t *testing.T) {
 		}
 	}
 
+	for _, targetID := range []string{"target-a", "target-b"} {
+		validation := acceptanceData(t, acceptanceRequest(t, router, http.MethodPost, "/api/v1/targets/"+targetID+"/connection-tests", nil, http.StatusOK))
+		if validation["reachable"] != true || validation["authenticated"] != true || validation["authorized"] != true ||
+			validation["validation_status"] != "verified" {
+			t.Fatalf("target %s validation = %#v", targetID, validation)
+		}
+	}
+	targetA.mu.Lock()
+	targetAChannelCount := len(targetA.channels)
+	targetA.mu.Unlock()
+	targetB.mu.Lock()
+	targetBChannelCount := len(targetB.channels)
+	targetB.mu.Unlock()
+	if targetAChannelCount != 0 || targetBChannelCount != 0 {
+		t.Fatalf("connection tests mutated targets: target-a=%d target-b=%d", targetAChannelCount, targetBChannelCount)
+	}
+
 	syncEnvelope := acceptanceRequest(t, router, http.MethodPost, "/api/v1/sync", map[string]any{
 		"upstream_id": "source-a",
 		"units": []map[string]any{
