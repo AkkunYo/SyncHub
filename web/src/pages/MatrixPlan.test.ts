@@ -1,7 +1,7 @@
 import { createPinia, setActivePinia } from 'pinia'
-import { render, screen, within } from '@testing-library/vue'
+import { render, screen, waitFor, within } from '@testing-library/vue'
 import userEvent from '@testing-library/user-event'
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 
 import { useConsoleStore } from '@/stores/console'
 import type { MatrixData, SanitizedConfig } from '@/types'
@@ -50,6 +50,22 @@ const matrix: MatrixData = {
 }
 
 it('previews a frozen three-step sync plan with target-specific settings', async () => {
+  const fetchMock = vi.fn(async (_input: RequestInfo | URL, init: RequestInit = {}) => {
+    const body = JSON.parse(String(init.body)) as { units: Array<Record<string, unknown>> }
+    return new Response(JSON.stringify({
+      success: true,
+      data: {
+        units: body.units.map((unit) => ({
+          unit_id: unit.unit_id,
+          asset_id: unit.asset_id,
+          target_id: unit.target_id,
+          status: 'synced',
+        })),
+      },
+      request_id: 'req-plan',
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  })
+  vi.stubGlobal('fetch', fetchMock)
   const pinia = createPinia()
   setActivePinia(pinia)
   const store = useConsoleStore()
@@ -76,4 +92,18 @@ it('previews a frozen three-step sync plan with target-specific settings', async
   expect(within(dialog).getByText(/计划 revision draft-/)).toBeInTheDocument()
   expect(within(dialog).getByLabelText('Target Alpha 分组')).toBeInTheDocument()
   expect(within(dialog).getByLabelText('Target Beta 权重')).toBeInTheDocument()
+
+  await user.clear(within(dialog).getByLabelText('分组'))
+  await user.type(within(dialog).getByLabelText('分组'), 'shared')
+  await user.clear(within(dialog).getByLabelText('Target Alpha 分组'))
+  await user.type(within(dialog).getByLabelText('Target Alpha 分组'), 'alpha')
+  await user.click(within(dialog).getByRole('button', { name: '开始同步' }))
+
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
+  const request = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as {
+    units: Array<{ target_id: string; settings: { target_group: string } }>
+  }
+  expect(request.units.find((unit) => unit.target_id === 'target-a')?.settings.target_group).toBe('alpha')
+  expect(request.units.find((unit) => unit.target_id === 'target-b')?.settings.target_group).toBe('shared')
+  vi.unstubAllGlobals()
 })
