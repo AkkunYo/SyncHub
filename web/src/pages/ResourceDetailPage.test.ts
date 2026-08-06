@@ -233,6 +233,34 @@ describe('Connection resource details', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  it('keeps the persisted successful target summary when a retest request fails', async () => {
+    const verifiedTarget = {
+      ...target,
+      validation_status: 'verified' as const,
+      validated_at: '2026-08-06T10:00:00Z',
+      validation_capabilities: {
+        platform: 'newapi',
+        providers: { openai: { modes: ['static_key'] } },
+      },
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      failure('upstream_failure', '目标连接暂时不可用'),
+    ))
+    const user = userEvent.setup()
+    const { store } = await renderDetail('target', 'source-generic', {
+      ...config,
+      targets: [verifiedTarget],
+    })
+
+    await user.click(screen.getByRole('button', { name: '验证目标连接' }))
+
+    expect(await screen.findByText('连接验证失败')).toBeInTheDocument()
+    expect(screen.getByText('目标连接暂时不可用')).toBeInTheDocument()
+    expect(store.targets[0]).toMatchObject(verifiedTarget)
+    expect(screen.getByText('2026-08-06T10:00:00Z')).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '目标能力' })).toHaveTextContent('static_key')
+  })
+
   it('uses the keys endpoint as the authoritative detail source with loading and retry states', async () => {
     let releaseKeys: ((response: Response) => void) | undefined
     const pendingKeys = new Promise<Response>((resolve) => {

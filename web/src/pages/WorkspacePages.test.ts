@@ -128,14 +128,27 @@ describe('workspace page information architecture', () => {
 
     expect(screen.getByRole('heading', { name: '资产矩阵' })).toHaveTextContent('同步工作台')
     const checklist = screen.getByRole('list', { name: '首次同步步骤' })
-    expect(within(checklist).getAllByRole('listitem')).toHaveLength(4)
+    expect(within(checklist).getAllByRole('listitem')).toHaveLength(5)
     expect(checklist).toHaveTextContent('配置目标实例')
+    expect(checklist).toHaveTextContent('验证目标实例')
     expect(checklist).toHaveTextContent('配置上游连接')
     expect(checklist).toHaveTextContent('刷新来源资产')
     expect(checklist).toHaveTextContent('选择资产并同步')
     expect(screen.getByRole('link', { name: '配置目标实例' })).toHaveAttribute('href', '/targets')
     expect(screen.getByRole('link', { name: '配置上游连接' })).toHaveAttribute('href', '/upstreams')
     expect(screen.queryByRole('button', { name: '前往设置' })).not.toBeInTheDocument()
+  })
+
+  it('tracks adding and validating a target as separate first-sync steps', () => {
+    const { pinia } = setupStore({ ...configured, upstreams: [] })
+    render(MatrixPage, {
+      global: { plugins: [pinia], stubs: { RouterLink: routerLinkStub } },
+    })
+
+    const checklist = screen.getByRole('list', { name: '首次同步步骤' })
+    expect(within(checklist).getByText('配置目标实例').closest('li')).toHaveClass('complete')
+    expect(within(checklist).getByText('验证目标实例').closest('li')).not.toHaveClass('complete')
+    expect(screen.getByText('1 / 5 已完成')).toBeInTheDocument()
   })
 
   it('routes missing channel prerequisites to target management', () => {
