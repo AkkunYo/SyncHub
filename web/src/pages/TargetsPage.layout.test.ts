@@ -32,16 +32,13 @@ describe('target list responsive layout', () => {
     const breakpoint = 720
     const mobileRules = blockFor(targetsPage, `@media (max-width: ${breakpoint}px)`)
     const row = declarationsFor(mobileRules, '.connection-table tr')
-    const targetCells = declarationsFor(mobileRules, '.connection-table td:nth-child(1),')
-    const accessCell = declarationsFor(mobileRules, '.connection-table td:nth-child(4)')
-    const validationCell = declarationsFor(mobileRules, '.connection-table td:nth-child(5)')
+    const targetCells = declarationsFor(mobileRules, '.connection-table td')
     const content = declarationsFor(mobileRules, '.primary-cell,')
 
     expect(viewportWidth).toBeLessThanOrEqual(breakpoint)
     expect(row).toContain('grid-template-columns: minmax(0, 1fr);')
     expect(targetCells).toContain('grid-column: 1;')
-    expect(accessCell).toContain('grid-column: 1;')
-    expect(validationCell).toContain('grid-column: 1;')
+    expect(targetCells).toContain('grid-column: 1;')
     expect(content).toContain('min-width: 0;')
   })
 })

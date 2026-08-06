@@ -930,26 +930,35 @@ async function testConnection(target: TargetConfig): Promise<void> {
   .connection-table thead { display: none; }
   .connection-table tr {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr);
     padding: 14px 12px 12px;
     border-bottom: 1px solid var(--line);
-    gap: 10px 14px;
+    gap: 8px;
   }
   .connection-table tbody tr:last-child { border-bottom: 0; }
-  .connection-table td { display: block; height: auto; padding: 0; border: 0; }
-  .connection-table td:nth-child(1),
-  .connection-table td:nth-child(3) { grid-column: 1; }
-  .connection-table td:nth-child(2) { grid-row: 1; grid-column: 2; }
-  .connection-table td:nth-child(3) { grid-row: 2; grid-column: 1 / -1; }
-  .connection-table td:nth-child(4) { grid-row: 3; grid-column: 1; }
-  .connection-table td:nth-child(5) { grid-row: 3; grid-column: 2; justify-self: end; }
+  .connection-table td {
+    display: block;
+    min-width: 0;
+    height: auto;
+    padding: 0;
+    border: 0;
+    grid-column: 1;
+  }
+  .connection-table td:nth-child(2),
+  .connection-table td:nth-child(3),
+  .connection-table td:nth-child(4),
+  .connection-table td:nth-child(5) { grid-row: auto; }
+  .connection-table td:nth-child(2) { justify-self: start; }
   .connection-table td:nth-child(6) {
-    grid-row: 4;
-    grid-column: 1 / -1;
+    grid-row: auto;
     margin-top: 2px;
     padding-top: 10px;
     border-top: 1px solid var(--line);
   }
+  .primary-cell,
+  .summary-cell,
+  .validation-cell { min-width: 0; }
+  .endpoint { min-width: 0; }
   .row-actions {
     display: grid;
     width: 100%;
