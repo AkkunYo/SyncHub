@@ -1,13 +1,23 @@
 package api
 
 import (
+	"errors"
 	"net/http"
+	"time"
 
+	"github.com/AkkunYo/SyncHub/internal/config"
 	"github.com/gin-gonic/gin"
 )
 
+var errTargetConnectionChanged = errors.New("target connection changed during validation")
+
 func (s *server) testTargetConnection(c *gin.Context) {
-	targetConfig, ok := targetByID(s.deps.Config.Snapshot(), c.Param("target_id"))
+	targetID := c.Param("target_id")
+	if validateNoQuery(c) != nil || requireEmptyBody(c) != nil || validateIdentifier(targetID) != nil {
+		writeFailure(c, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	targetConfig, ok := targetByID(s.deps.Config.Snapshot(), targetID)
 	if !ok {
 		writeFailure(c, http.StatusNotFound, "target_not_found")
 		return
@@ -17,18 +27,56 @@ func (s *server) testTargetConnection(c *gin.Context) {
 		respondDependencyError(c, err, upstreamFailure)
 		return
 	}
+	if capabilities.Platform != targetConfig.Type || len(capabilities.Providers) == 0 {
+		respondDependencyError(c, ErrUpstreamFailure, upstreamFailure)
+		return
+	}
 	channels, err := target.ListChannels(c.Request.Context())
 	if err != nil {
 		respondDependencyError(c, err, upstreamFailure)
 		return
 	}
-	writeSuccess(c, http.StatusOK, gin.H{
-		"reachable":      true,
-		"authenticated":  true,
-		"authorized":     true,
-		"resource_count": len(channels),
-		"capabilities":   capabilities,
+	validatedAt := time.Now().UTC()
+	persistedCapabilities := copyValidationCapabilities(capabilities)
+	err = s.deps.Config.Update(c.Request.Context(), func(cfg *config.Config) error {
+		index, exists := findTarget(cfg, targetID)
+		if !exists {
+			return errMutationNotFound
+		}
+		current := &cfg.Targets[index]
+		if !sameTargetConnection(*current, targetConfig) {
+			return errTargetConnectionChanged
+		}
+		current.ValidationStatus = config.TargetValidationVerified
+		current.ValidatedAt = &validatedAt
+		current.ValidationCapabilities = copyValidationCapabilities(persistedCapabilities)
+		return nil
 	})
+	switch {
+	case errors.Is(err, errMutationNotFound):
+		writeFailure(c, http.StatusNotFound, "target_not_found")
+		return
+	case errors.Is(err, errTargetConnectionChanged):
+		writeFailure(c, http.StatusConflict, "operation_in_progress")
+		return
+	case err != nil:
+		respondDependencyError(c, err, internalError)
+		return
+	}
+	writeSuccess(c, http.StatusOK, gin.H{
+		"reachable":         true,
+		"authenticated":     true,
+		"authorized":        true,
+		"resource_count":    len(channels),
+		"capabilities":      capabilities,
+		"validation_status": config.TargetValidationVerified,
+		"validated_at":      validatedAt,
+	})
+}
+
+func sameTargetConnection(left, right config.TargetConfig) bool {
+	return left.ID == right.ID && left.Type == right.Type && left.BaseURL == right.BaseURL && left.UserID == right.UserID &&
+		left.AccessToken == right.AccessToken && left.ManagementKey == right.ManagementKey && left.APIKey == right.APIKey
 }
 
 func (s *server) testUpstreamConnection(c *gin.Context) {

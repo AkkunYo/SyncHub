@@ -422,9 +422,10 @@ func TestOperationDependencyFailuresAndBoundaries(t *testing.T) {
 func TestBatchSyncTargetResolverFailuresRemainPerTarget(t *testing.T) {
 	t.Run("one target fails and another syncs", func(t *testing.T) {
 		env := newTestEnvironment()
-		env.store.cfg.Targets = append(env.store.cfg.Targets, config.TargetConfig{
-			ID: "target-b", Name: "Target B", Type: "newapi", BaseURL: "https://target-b.example.com", AccessToken: "target-b-credential",
-		})
+		targetBConfig := env.store.cfg.Targets[0]
+		targetBConfig.ID, targetBConfig.Name = "target-b", "Target B"
+		targetBConfig.BaseURL, targetBConfig.AccessToken = "https://target-b.example.com", "target-b-credential"
+		env.store.cfg.Targets = append(env.store.cfg.Targets, targetBConfig)
 		resolvedA := env.resolver.targets["target-a"]
 		resolvedA.err = errors.New("resolver detail " + testSecret)
 		env.resolver.targets["target-a"] = resolvedA

@@ -942,9 +942,10 @@ func TestAssetsWithoutSnapshotAndQueryValidation(t *testing.T) {
 func TestBatchSyncKeepsUnitsAndGrantRequestScoped(t *testing.T) {
 	env := newTestEnvironment()
 	targetB := &fakeTarget{}
-	env.store.cfg.Targets = append(env.store.cfg.Targets, config.TargetConfig{
-		ID: "target-b", Name: "Target B", Type: "newapi", BaseURL: "https://target-b.example.com", AccessToken: testSecret,
-	})
+	targetBConfig := env.store.cfg.Targets[0]
+	targetBConfig.ID, targetBConfig.Name = "target-b", "Target B"
+	targetBConfig.BaseURL = "https://target-b.example.com"
+	env.store.cfg.Targets = append(env.store.cfg.Targets, targetBConfig)
 	env.resolver.targets["target-b"] = targetResolution{
 		adapter: targetB,
 		capabilities: platform.TargetCapabilities{Platform: "newapi", Providers: map[string]platform.ProviderCapability{

@@ -43,15 +43,26 @@ type AppConfig struct {
 }
 
 type TargetConfig struct {
-	ID            string `json:"id" yaml:"id"`
-	Name          string `json:"name" yaml:"name"`
-	Type          string `json:"type" yaml:"type"`
-	BaseURL       string `json:"base_url" yaml:"base_url"`
-	UserID        int    `json:"user_id,omitempty" yaml:"user_id,omitempty"`
-	AccessToken   string `json:"-" yaml:"access_token,omitempty"`
-	ManagementKey string `json:"-" yaml:"management_key,omitempty"`
-	APIKey        string `json:"-" yaml:"api_key,omitempty"`
+	ID                     string                      `json:"id" yaml:"id"`
+	Name                   string                      `json:"name" yaml:"name"`
+	Type                   string                      `json:"type" yaml:"type"`
+	BaseURL                string                      `json:"base_url" yaml:"base_url"`
+	UserID                 int                         `json:"user_id,omitempty" yaml:"user_id,omitempty"`
+	AccessToken            string                      `json:"-" yaml:"access_token,omitempty"`
+	ManagementKey          string                      `json:"-" yaml:"management_key,omitempty"`
+	APIKey                 string                      `json:"-" yaml:"api_key,omitempty"`
+	ValidationStatus       TargetValidationStatus      `json:"validation_status" yaml:"validation_status,omitempty"`
+	ValidatedAt            *time.Time                  `json:"validated_at,omitempty" yaml:"validated_at,omitempty"`
+	ValidationCapabilities platform.TargetCapabilities `json:"validation_capabilities,omitempty" yaml:"validation_capabilities,omitempty"`
 }
+
+type TargetValidationStatus string
+
+const (
+	TargetValidationUnverified TargetValidationStatus = "unverified"
+	TargetValidationVerified   TargetValidationStatus = "verified"
+	TargetValidationFailed     TargetValidationStatus = "failed"
+)
 
 type UpstreamConfig struct {
 	ID          string             `json:"id" yaml:"id"`
@@ -203,6 +214,9 @@ func Validate(cfg *Config) error {
 				return fmt.Errorf("target[%d].management_key is required", i)
 			}
 		}
+		if err := normalizeTargetValidation(i, target); err != nil {
+			return err
+		}
 	}
 
 	upstreamIDs := make(map[string]struct{}, len(cfg.Upstreams))
@@ -319,6 +333,36 @@ func Validate(cfg *Config) error {
 		}
 	}
 	return nil
+}
+
+func normalizeTargetValidation(index int, target *TargetConfig) error {
+	status := TargetValidationStatus(strings.ToLower(strings.TrimSpace(string(target.ValidationStatus))))
+	if status == "" {
+		status = TargetValidationUnverified
+	}
+	target.ValidationStatus = status
+	switch status {
+	case TargetValidationUnverified:
+		target.ValidatedAt = nil
+		target.ValidationCapabilities = platform.TargetCapabilities{}
+		return nil
+	case TargetValidationVerified:
+		if target.ValidatedAt == nil || target.ValidatedAt.IsZero() {
+			return fmt.Errorf("target[%d].validated_at is required for verified validation", index)
+		}
+		if target.ValidationCapabilities.Platform != target.Type || len(target.ValidationCapabilities.Providers) == 0 {
+			return fmt.Errorf("target[%d].validation_capabilities is invalid", index)
+		}
+		checkedAt := target.ValidatedAt.UTC()
+		target.ValidatedAt = &checkedAt
+		return nil
+	case TargetValidationFailed:
+		// Failed is accepted for forward compatibility, but current connection
+		// tests deliberately leave the last successful summary untouched.
+		return nil
+	default:
+		return fmt.Errorf("target[%d].validation_status %q is invalid", index, status)
+	}
 }
 
 func normalizeGenericKeys(upstreamIndex int, upstream *UpstreamConfig) error {
@@ -489,6 +533,13 @@ func migrateMapping(sourceID string, mapping *SyncMapping) {
 func deepCopy(cfg Config) Config {
 	copyConfig := cfg
 	copyConfig.Targets = append([]TargetConfig(nil), cfg.Targets...)
+	for i := range copyConfig.Targets {
+		if cfg.Targets[i].ValidatedAt != nil {
+			validatedAt := *cfg.Targets[i].ValidatedAt
+			copyConfig.Targets[i].ValidatedAt = &validatedAt
+		}
+		copyConfig.Targets[i].ValidationCapabilities = cloneTargetCapabilities(cfg.Targets[i].ValidationCapabilities)
+	}
 	copyConfig.Upstreams = make([]UpstreamConfig, len(cfg.Upstreams))
 	for i := range cfg.Upstreams {
 		copyConfig.Upstreams[i] = cfg.Upstreams[i]
@@ -512,4 +563,17 @@ func deepCopy(cfg Config) Config {
 		}
 	}
 	return copyConfig
+}
+
+func cloneTargetCapabilities(capabilities platform.TargetCapabilities) platform.TargetCapabilities {
+	copyCapabilities := capabilities
+	if capabilities.Providers == nil {
+		return copyCapabilities
+	}
+	copyCapabilities.Providers = make(map[string]platform.ProviderCapability, len(capabilities.Providers))
+	for provider, capability := range capabilities.Providers {
+		capability.Modes = append([]platform.SyncMode(nil), capability.Modes...)
+		copyCapabilities.Providers[provider] = capability
+	}
+	return copyCapabilities
 }

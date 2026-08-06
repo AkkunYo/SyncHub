@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/AkkunYo/SyncHub/internal/config"
 	"github.com/AkkunYo/SyncHub/internal/platform"
@@ -35,11 +36,14 @@ type publicAppConfig struct {
 }
 
 type publicTarget struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Type    string `json:"type"`
-	BaseURL string `json:"base_url"`
-	UserID  int    `json:"user_id,omitempty"`
+	ID                     string                        `json:"id"`
+	Name                   string                        `json:"name"`
+	Type                   string                        `json:"type"`
+	BaseURL                string                        `json:"base_url"`
+	UserID                 int                           `json:"user_id,omitempty"`
+	ValidationStatus       config.TargetValidationStatus `json:"validation_status"`
+	ValidatedAt            *time.Time                    `json:"validated_at,omitempty"`
+	ValidationCapabilities *platform.TargetCapabilities  `json:"validation_capabilities,omitempty"`
 }
 
 type publicUpstream struct {
@@ -369,7 +373,36 @@ func applyDiscoveryModeStatus(result publicUpstream, upstream config.UpstreamCon
 }
 
 func redactTarget(target config.TargetConfig) publicTarget {
-	return publicTarget{ID: target.ID, Name: target.Name, Type: target.Type, BaseURL: target.BaseURL, UserID: target.UserID}
+	status := target.ValidationStatus
+	if status == "" {
+		status = config.TargetValidationUnverified
+	}
+	result := publicTarget{
+		ID: target.ID, Name: target.Name, Type: target.Type, BaseURL: target.BaseURL, UserID: target.UserID,
+		ValidationStatus: status,
+	}
+	if target.ValidatedAt != nil {
+		validatedAt := *target.ValidatedAt
+		result.ValidatedAt = &validatedAt
+	}
+	if target.ValidationCapabilities.Platform != "" || len(target.ValidationCapabilities.Providers) != 0 {
+		capabilities := copyValidationCapabilities(target.ValidationCapabilities)
+		result.ValidationCapabilities = &capabilities
+	}
+	return result
+}
+
+func copyValidationCapabilities(capabilities platform.TargetCapabilities) platform.TargetCapabilities {
+	result := capabilities
+	if capabilities.Providers == nil {
+		return result
+	}
+	result.Providers = make(map[string]platform.ProviderCapability, len(capabilities.Providers))
+	for provider, capability := range capabilities.Providers {
+		capability.Modes = append([]platform.SyncMode(nil), capability.Modes...)
+		result.Providers[provider] = capability
+	}
+	return result
 }
 
 func redactUpstream(upstream config.UpstreamConfig) publicUpstream {

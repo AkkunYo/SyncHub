@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/AkkunYo/SyncHub/internal/config"
+	"github.com/AkkunYo/SyncHub/internal/platform"
 	"github.com/gin-gonic/gin"
 )
 
@@ -121,6 +122,8 @@ func (s *server) updateTarget(c *gin.Context) {
 			return errMutationNotFound
 		}
 		target := &cfg.Targets[index]
+		connectionChanged := target.BaseURL != baseURL || request.AccessToken.set || request.ManagementKey.set || request.APIKey.set ||
+			(request.UserID.set && target.UserID != request.UserID.value)
 		if err := applyTargetCredentials(target, request.AccessToken, request.ManagementKey, request.APIKey); err != nil {
 			return err
 		}
@@ -129,6 +132,9 @@ func (s *server) updateTarget(c *gin.Context) {
 		}
 		target.Name = name
 		target.BaseURL = baseURL
+		if connectionChanged {
+			invalidateTargetValidation(target)
+		}
 		updated = *target
 		return nil
 	})
@@ -141,6 +147,15 @@ func (s *server) updateTarget(c *gin.Context) {
 		return
 	}
 	writeSuccess(c, http.StatusOK, redactTarget(updated))
+}
+
+func invalidateTargetValidation(target *config.TargetConfig) {
+	if target == nil {
+		return
+	}
+	target.ValidationStatus = config.TargetValidationUnverified
+	target.ValidatedAt = nil
+	target.ValidationCapabilities = platform.TargetCapabilities{}
 }
 
 func (s *server) deleteTarget(c *gin.Context) {

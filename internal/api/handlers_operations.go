@@ -362,12 +362,25 @@ func (s *server) batchSync(c *gin.Context) {
 	unlock := s.lockTuples(keys)
 	defer unlock()
 
-	source, err := s.deps.Adapters.ResolveUpstream(c.Request.Context(), upstreamConfig)
-	if err != nil {
-		respondDependencyError(c, err, internalError)
-		return
-	}
 	result := syncservice.MultiResult{Units: make([]syncservice.UnitResult, len(normalized))}
+	hasVerifiedTarget := false
+	for i, unit := range normalized {
+		result.Units[i] = emptyUnitResult(unit)
+		if targetConfigs[i].ValidationStatus != config.TargetValidationVerified {
+			result.Units[i].Status = syncservice.TargetIncompatible
+			result.Units[i].Code = "target_unverified"
+			continue
+		}
+		hasVerifiedTarget = true
+	}
+	var source platform.UpstreamAdapter
+	if hasVerifiedTarget {
+		source, err = s.deps.Adapters.ResolveUpstream(c.Request.Context(), upstreamConfig)
+		if err != nil {
+			respondDependencyError(c, err, internalError)
+			return
+		}
+	}
 	active := make([]syncservice.UnitRequest, 0, len(normalized))
 	activeIndexes := make([]int, 0, len(normalized))
 	targetAdapters := make(map[runtimeKey]platform.TargetAdapter, len(normalized))
@@ -378,7 +391,9 @@ func (s *server) batchSync(c *gin.Context) {
 	}
 	targets := make(map[string]resolvedTarget)
 	for i, unit := range normalized {
-		result.Units[i] = emptyUnitResult(unit)
+		if targetConfigs[i].ValidationStatus != config.TargetValidationVerified {
+			continue
+		}
 		key := runtimeKey{assetID: unit.AssetID, targetID: unit.TargetID}
 		if pending, exists := s.pendingState(key); exists {
 			result.Units[i].Status = syncservice.TargetNeedsReconcile

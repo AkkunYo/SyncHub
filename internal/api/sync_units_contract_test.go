@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/AkkunYo/SyncHub/internal/config"
 	"github.com/AkkunYo/SyncHub/internal/discovery"
 	"github.com/AkkunYo/SyncHub/internal/platform"
 	syncservice "github.com/AkkunYo/SyncHub/internal/sync"
@@ -71,9 +70,10 @@ func TestSyncUnitsUsesSnapshotFactsPreservesOrderAndSeparatesGroups(t *testing.T
 		Name: "vip", Ratio: 1.5, RatioKnown: true, Models: []string{"gpt-4o"}, ModelsVerified: true,
 	}}}
 	env.fakeDisc.snapshots["source-a"] = snapshot
-	env.store.cfg.Targets = append(env.store.cfg.Targets, config.TargetConfig{
-		ID: "target-b", Name: "Target B", Type: "newapi", BaseURL: "https://target-b.example.com", AccessToken: testSecret,
-	})
+	targetBConfig := env.store.cfg.Targets[0]
+	targetBConfig.ID, targetBConfig.Name = "target-b", "Target B"
+	targetBConfig.BaseURL = "https://target-b.example.com"
+	env.store.cfg.Targets = append(env.store.cfg.Targets, targetBConfig)
 	env.resolver.targets["target-b"] = env.resolver.targets["target-a"]
 	env.syncer.multiResult = syncservice.MultiResult{Units: []syncservice.UnitResult{
 		{UnitID: "u-token", AssetID: token.ID, TargetID: "target-b", UpstreamGroup: "vip", Status: syncservice.TargetSynced, ChannelID: "42", EffectiveModels: []string{"gpt-4o"}, ExcludedModels: []string{}, Warnings: []string{}},
