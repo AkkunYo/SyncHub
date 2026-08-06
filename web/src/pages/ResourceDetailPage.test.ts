@@ -218,6 +218,21 @@ describe('Connection resource details', () => {
     expect(await screen.findByText('服务端权威 Key')).toBeInTheDocument()
   })
 
+  it('does not present a failed initial Key request as an authoritative empty list', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      failure('upstream_failure', 'Key 列表暂时不可用'),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await renderDetail('upstream')
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Key 列表暂时不可用')
+    expect(screen.getByText('加载失败')).toBeInTheDocument()
+    expect(screen.queryByText('0 个 Key')).not.toBeInTheDocument()
+    expect(screen.queryByText('尚未配置通用 Key')).not.toBeInTheDocument()
+    expect(screen.queryByText('暂无已发现的用户 Key')).not.toBeInTheDocument()
+  })
+
   it('discovers models and probes one model at a time inside the current-key modal', async () => {
     const healthyProbe = {
       key_id: 'primary',
