@@ -104,6 +104,7 @@ onMounted(() => {
     <header class="page-header tasks-page-header">
       <div>
         <h1 id="tasks-heading">任务记录</h1>
+        <p>查看同步、校验与模型发现任务的执行结果。</p>
       </div>
     </header>
 
@@ -118,48 +119,96 @@ onMounted(() => {
           重试
         </button>
       </div>
-      <div v-else class="table-scroll tasks-table-scroll">
-        <table class="data-table tasks-table" aria-label="任务状态列表">
-          <thead>
-            <tr>
-              <th>任务类型</th>
-              <th>范围</th>
-              <th>状态</th>
-              <th>开始时间</th>
-              <th>完成时间</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-if="displayedTasks.length === 0" class="task-empty-row">
-              <td colspan="5" class="task-empty-cell">
-                <div class="task-empty-content">
-                  <ListChecks :size="24" aria-hidden="true" />
-                  <strong>暂无任务记录</strong>
-                  <RouterLink class="primary-button" to="/sync">返回同步工作台</RouterLink>
-                </div>
-              </td>
-            </tr>
-            <tr v-for="task in displayedTasks" :key="task.id" :aria-label="`${taskTypeLabel(task.type)} ${task.scope}`">
-              <td data-label="任务类型">
-                <div class="task-primary-cell">
-                  <RouterLink :to="{ name: 'task-detail', params: { id: task.id } }">
-                    {{ taskTypeLabel(task.type) }}
-                  </RouterLink>
-                  <code>{{ task.id }}</code>
-                </div>
-              </td>
-              <td data-label="范围">{{ task.scope }}</td>
-              <td data-label="状态">
-                <span class="task-status" :class="`is-${task.status}`">{{ taskStatusLabel(task.status) }}</span>
-                <small v-if="task.detail" class="task-detail">{{ task.detail }}</small>
-                <small v-if="summaryLabel(task)" class="task-detail">{{ summaryLabel(task) }}</small>
-              </td>
-              <td data-label="开始时间">{{ task.startedAt }}</td>
-              <td data-label="完成时间">{{ task.completedAt || '--' }}</td>
-            </tr>
-          </tbody>
-        </table>
+      <div
+        v-else-if="displayedTasks.length === 0"
+        class="task-state task-empty-content"
+        role="status"
+        aria-label="暂无任务记录"
+      >
+        <span class="task-state-icon" aria-hidden="true">
+          <ListChecks :size="22" />
+        </span>
+        <strong>暂无任务记录</strong>
+        <p>同步或校验任务执行后，会在这里保留状态与时间记录。</p>
+        <RouterLink class="secondary-button" to="/sync">前往同步工作台</RouterLink>
       </div>
+      <template v-else>
+        <div class="table-scroll tasks-table-scroll">
+          <table class="data-table tasks-table" aria-label="任务状态列表">
+            <thead>
+              <tr>
+                <th>任务类型</th>
+                <th>范围</th>
+                <th>状态</th>
+                <th>开始时间</th>
+                <th>完成时间</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="task in displayedTasks" :key="task.id" :aria-label="`${taskTypeLabel(task.type)} ${task.scope}`">
+                <td data-label="任务类型">
+                  <div class="task-primary-cell">
+                    <RouterLink :to="{ name: 'task-detail', params: { id: task.id } }">
+                      {{ taskTypeLabel(task.type) }}
+                    </RouterLink>
+                    <code class="task-id">{{ task.id }}</code>
+                  </div>
+                </td>
+                <td data-label="范围">{{ task.scope }}</td>
+                <td data-label="状态">
+                  <span class="task-status" :class="`is-${task.status}`">{{ taskStatusLabel(task.status) }}</span>
+                  <small v-if="task.detail" class="task-detail">{{ task.detail }}</small>
+                  <small v-if="summaryLabel(task)" class="task-detail">{{ summaryLabel(task) }}</small>
+                </td>
+                <td data-label="开始时间">{{ task.startedAt }}</td>
+                <td data-label="完成时间">{{ task.completedAt || '--' }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <ul class="tasks-mobile-list" aria-label="移动端任务状态列表">
+          <li
+            v-for="task in displayedTasks"
+            :key="`mobile-${task.id}`"
+            :aria-label="`${taskTypeLabel(task.type)} ${task.scope}`"
+          >
+            <div class="task-mobile-heading">
+              <RouterLink :to="{ name: 'task-detail', params: { id: task.id } }">
+                {{ taskTypeLabel(task.type) }}
+              </RouterLink>
+              <span class="task-status" :class="`is-${task.status}`">{{ taskStatusLabel(task.status) }}</span>
+            </div>
+            <code class="task-id">{{ task.id }}</code>
+            <dl class="task-mobile-fields">
+              <div>
+                <dt>任务类型</dt>
+                <dd>{{ taskTypeLabel(task.type) }}</dd>
+              </div>
+              <div>
+                <dt>范围</dt>
+                <dd>{{ task.scope }}</dd>
+              </div>
+              <div>
+                <dt>状态</dt>
+                <dd>
+                  {{ taskStatusLabel(task.status) }}
+                  <small v-if="task.detail" class="task-detail">{{ task.detail }}</small>
+                  <small v-if="summaryLabel(task)" class="task-detail">{{ summaryLabel(task) }}</small>
+                </dd>
+              </div>
+              <div>
+                <dt>开始时间</dt>
+                <dd>{{ task.startedAt }}</dd>
+              </div>
+              <div>
+                <dt>完成时间</dt>
+                <dd>{{ task.completedAt || '--' }}</dd>
+              </div>
+            </dl>
+          </li>
+        </ul>
+      </template>
     </section>
   </section>
 </template>
@@ -167,6 +216,12 @@ onMounted(() => {
 <style scoped>
 .tasks-page-header {
   min-height: 38px;
+}
+
+.tasks-page-header p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .tasks-workspace,
@@ -201,7 +256,8 @@ onMounted(() => {
 .task-state p {
   max-width: 52ch;
   margin: 0;
-  font-size: 12px;
+  font-size: 13px;
+  line-height: 1.65;
 }
 
 .task-error {
@@ -221,6 +277,15 @@ onMounted(() => {
 
 .task-primary-cell a:hover {
   text-decoration: underline;
+}
+
+.task-id {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  word-break: break-word;
 }
 
 .task-primary-cell code {
@@ -263,15 +328,7 @@ onMounted(() => {
   font-size: 11px;
 }
 
-.task-empty-cell {
-  height: 220px;
-  padding: 20px;
-}
-
 .task-empty-content {
-  display: grid;
-  justify-items: center;
-  gap: 10px;
   color: var(--muted);
 }
 
@@ -280,33 +337,105 @@ onMounted(() => {
   font-size: 15px;
 }
 
+.task-state-icon {
+  display: inline-grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-subtle, #f8fafc);
+  color: var(--muted);
+}
+
+.task-empty-content .secondary-button {
+  min-height: 44px;
+  margin-top: 4px;
+}
+
+.tasks-mobile-list {
+  display: none;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.task-mobile-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.task-mobile-heading a {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 44px;
+  align-items: center;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.task-mobile-fields {
+  display: grid;
+  gap: 0;
+  margin: 8px 0 0;
+}
+
+.task-mobile-fields > div {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+}
+
+.task-mobile-fields dt,
+.task-mobile-fields dd {
+  min-width: 0;
+  margin: 0;
+}
+
+.task-mobile-fields dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.task-mobile-fields dd {
+  color: var(--ink);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 620px) {
-  .tasks-table {
-    min-width: 0;
+  .tasks-table-scroll {
+    display: none;
   }
 
-  .tasks-table thead {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-  }
-
-  .tasks-table tbody,
-  .tasks-table tbody tr,
-  .tasks-table tbody td {
+  .tasks-mobile-list {
     display: block;
-    width: 100%;
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    background: var(--surface);
   }
 
-  .task-empty-cell {
-    min-height: 190px;
+  .tasks-mobile-list > li {
+    min-width: 0;
+    padding: 12px 10px 10px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .tasks-mobile-list > li:last-child {
     border-bottom: 0;
   }
 
   .task-state {
     min-height: 190px;
+    padding: 20px 14px;
   }
 }
 </style>

@@ -32,9 +32,10 @@ describe('TasksPage workflow states', () => {
 
     render(TasksPage, { global: { stubs: { RouterLink: routerLinkStub } } })
 
-    expect(await screen.findByText('资产同步')).toBeInTheDocument()
-    expect(screen.getByText('task-auto')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: '资产同步' })).toHaveAttribute('href', '/tasks/task-auto')
+    const table = await screen.findByRole('table', { name: '任务状态列表' })
+    expect(within(table).getByText('资产同步')).toBeInTheDocument()
+    expect(within(table).getByText('task-auto')).toBeInTheDocument()
+    expect(within(table).getByRole('link', { name: '资产同步' })).toHaveAttribute('href', '/tasks/task-auto')
   })
 
   it('shows an automatic load error and retries the request', async () => {
