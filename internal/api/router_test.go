@@ -1129,9 +1129,14 @@ func TestReconcileAndAcceptDriftUseLiveTargetState(t *testing.T) {
 		t.Fatalf("report=%#v", envelope)
 	}
 
+	acceptedMapping := mapping
+	acceptedMapping.Snapshot = platform.SnapshotFromChannel(target.channels[0])
+	env.reconciler.report = reconcile.Report{TargetID: "target-a", Mappings: []reconcile.MappingState{{
+		Mapping: acceptedMapping, Status: reconcile.StatusSynced,
+	}}}
 	body := `{"upstream_asset_id":"source-a:channel:7:key:0","channel_id":"42"}`
 	recorder, envelope = request(t, router, http.MethodPost, "/api/v1/targets/target-a/drift/accept", body, "application/json")
-	if recorder.Code != http.StatusOK || env.reconciler.acceptCalls != 1 {
+	if recorder.Code != http.StatusOK || env.reconciler.acceptCalls != 1 || env.reconciler.checkCalls != 2 {
 		t.Fatalf("accept status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 	if env.reconciler.accepted.UpstreamAssetID != mapping.UpstreamAssetID || env.reconciler.current.Models[0] != "gpt-4.1" {

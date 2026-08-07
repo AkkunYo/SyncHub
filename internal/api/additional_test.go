@@ -795,6 +795,11 @@ func TestSuccessfulSyncAndAcceptDriftClearDifferences(t *testing.T) {
 					t.Fatalf("sync status=%d body=%s", recorder.Code, recorder.Body.String())
 				}
 			} else {
+				acceptedMapping := mapping
+				acceptedMapping.Snapshot = platform.SnapshotFromChannel(target.channels[0])
+				env.reconciler.report = reconcile.Report{TargetID: "target-a", Mappings: []reconcile.MappingState{{
+					Mapping: acceptedMapping, Status: reconcile.StatusSynced,
+				}}}
 				body := `{"upstream_asset_id":"source-a:channel:7:key:0","channel_id":"42"}`
 				recorder, _ := request(t, router, http.MethodPost, "/api/v1/targets/target-a/drift/accept", body, "application/json")
 				if recorder.Code != http.StatusOK {

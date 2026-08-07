@@ -585,6 +585,10 @@ func (s *server) acceptDrift(c *gin.Context) {
 		writeFailure(c, http.StatusBadRequest, "invalid_request")
 		return
 	}
+	key := runtimeKey{assetID: request.UpstreamAssetID, targetID: targetID}
+	unlock := s.lockTuples([]runtimeKey{key})
+	defer unlock()
+
 	targetConfig, ok := targetByID(s.deps.Config.Snapshot(), targetID)
 	if !ok {
 		writeFailure(c, http.StatusNotFound, "target_not_found")
@@ -634,8 +638,18 @@ func (s *server) acceptDrift(c *gin.Context) {
 		return
 	}
 	mapping.Snapshot = platform.SnapshotFromChannel(*current)
-	s.clearRuntimeState(runtimeKey{assetID: mapping.UpstreamAssetID, targetID: targetID})
-	writeSuccess(c, http.StatusOK, gin.H{"mapping": *mapping})
+	report, err := s.runtime.CheckAndRecord(c.Request.Context(), s.deps.Reconcile, targetID, target)
+	if err != nil {
+		s.markNeedsReconcile(key, request.ChannelID)
+		writeFailure(c, http.StatusConflict, "needs_reconcile")
+		return
+	}
+	if !reportMappingIsSynced(report, targetID, mapping.UpstreamAssetID, mapping.TargetChannelID) {
+		writeFailure(c, http.StatusConflict, "needs_reconcile")
+		return
+	}
+	s.clearRuntimeState(key)
+	writeSuccess(c, http.StatusOK, gin.H{"mapping": *mapping, "report": report})
 }
 
 func (s *server) restoreDrift(c *gin.Context) {
@@ -649,6 +663,10 @@ func (s *server) restoreDrift(c *gin.Context) {
 		writeFailure(c, http.StatusBadRequest, "invalid_request")
 		return
 	}
+	key := runtimeKey{assetID: request.UpstreamAssetID, targetID: targetID}
+	unlock := s.lockTuples([]runtimeKey{key})
+	defer unlock()
+
 	targetConfig, ok := targetByID(s.deps.Config.Snapshot(), targetID)
 	if !ok {
 		writeFailure(c, http.StatusNotFound, "target_not_found")
@@ -707,22 +725,13 @@ func (s *server) restoreDrift(c *gin.Context) {
 		respondDependencyError(c, ErrUpstreamFailure, upstreamFailure)
 		return
 	}
-	key := runtimeKey{assetID: mapping.UpstreamAssetID, targetID: targetID}
 	report, err := s.runtime.CheckAndRecord(c.Request.Context(), s.deps.Reconcile, targetID, target)
 	if err != nil {
 		s.markNeedsReconcile(key, request.ChannelID)
 		writeFailure(c, http.StatusConflict, "needs_reconcile")
 		return
 	}
-	selectedSynced := false
-	for _, state := range report.Mappings {
-		candidate := state.Mapping
-		if candidate.TargetID == targetID && candidate.UpstreamAssetID == mapping.UpstreamAssetID && candidate.TargetChannelID == mapping.TargetChannelID {
-			selectedSynced = state.Status == reconcile.StatusSynced
-			break
-		}
-	}
-	if !selectedSynced {
+	if !reportMappingIsSynced(report, targetID, mapping.UpstreamAssetID, mapping.TargetChannelID) {
 		writeFailure(c, http.StatusConflict, "needs_reconcile")
 		return
 	}
@@ -732,6 +741,16 @@ func (s *server) restoreDrift(c *gin.Context) {
 		"channel": toManagedChannel(updated, mapping),
 		"report":  report,
 	})
+}
+
+func reportMappingIsSynced(report reconcile.Report, targetID, assetID, channelID string) bool {
+	for _, state := range report.Mappings {
+		mapping := state.Mapping
+		if mapping.TargetID == targetID && mapping.UpstreamAssetID == assetID && mapping.TargetChannelID == channelID {
+			return state.Status == reconcile.StatusSynced
+		}
+	}
+	return false
 }
 
 func targetByID(cfg config.Config, targetID string) (config.TargetConfig, bool) {
