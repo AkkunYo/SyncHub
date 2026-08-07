@@ -322,7 +322,7 @@ async function confirmDelete(): Promise<void> {
               </select>
             </label>
             <button
-              class="icon-button"
+              class="icon-button channel-refresh"
               type="button"
               aria-label="刷新目标渠道"
               title="刷新目标渠道"
@@ -421,6 +421,7 @@ async function confirmDelete(): Promise<void> {
                       @click="openEdit(channel)"
                     >
                       <Pencil :size="16" aria-hidden="true" />
+                      <span class="channel-action-label">编辑</span>
                     </button>
                     <button
                       class="icon-button icon-button-small danger-icon"
@@ -430,6 +431,7 @@ async function confirmDelete(): Promise<void> {
                       @click="deleteChannel = channel; actionError = ''"
                     >
                       <Trash2 :size="16" aria-hidden="true" />
+                      <span class="channel-action-label">删除</span>
                     </button>
                   </td>
                 </tr>
@@ -592,6 +594,10 @@ async function confirmDelete(): Promise<void> {
   border-radius: 4px;
 }
 
+.channel-action-label {
+  display: none;
+}
+
 @media (max-width: 620px) {
   .channel-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -606,14 +612,137 @@ async function confirmDelete(): Promise<void> {
   }
 
   .channels-workspace :deep(.workspace-toolbar) {
+    grid-template-columns: minmax(0, 1fr);
     padding: 8px;
+  }
+
+  .toolbar-filters {
+    display: grid;
+    width: 100%;
+    min-width: 0;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) var(--touch-target);
+    gap: 8px;
+  }
+
+  .toolbar-filters .search-field {
+    grid-column: 1 / -1;
+  }
+
+  .channels-workspace :deep(.target-filter),
+  .toolbar-filters .search-field,
+  .toolbar-filters .filter-field {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .channel-refresh {
+    width: var(--touch-target);
+    min-width: var(--touch-target);
+    min-height: var(--touch-target);
+    align-self: end;
   }
 
   .channels-table tbody tr {
     display: grid;
+    padding: 0 10px;
     border-top: 1px solid var(--line);
     border-left: 0;
     border-radius: 0;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0 8px;
+  }
+
+  .channels-table td {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .channels-table .channel-cell {
+    padding: 10px 0 9px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .channels-table .source-cell {
+    display: grid;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--line);
+    grid-column: 1 / -1;
+    grid-row: 2;
+    gap: 5px;
+  }
+
+  .channels-table .channel-cell small,
+  .channels-table .source-cell small {
+    max-width: 100%;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .channels-table .channel-cell::before,
+  .channels-table .source-cell::before,
+  .channels-table .status-cell::before {
+    display: block;
+  }
+
+  .channels-table .models-cell {
+    padding: 9px 8px;
+  }
+
+  .mobile-model-details p {
+    overflow-wrap: anywhere;
+  }
+
+  .channels-table .group-cell,
+  .channels-table .priority-cell,
+  .channels-table .weight-cell {
+    min-width: 0;
+    padding: 9px 0;
+    overflow-wrap: anywhere;
+  }
+
+  .channels-table .status-cell {
+    display: grid;
+    padding: 9px 0;
+    border-top: 1px solid var(--line);
+    grid-column: 1 / -1;
+    grid-row: 5;
+    grid-template-columns: 72px minmax(0, 1fr);
+    align-items: center;
+    justify-self: stretch;
+    text-align: left !important;
+  }
+
+  .channels-table .status-cell::before {
+    margin-bottom: 0;
+  }
+
+  .channels-table .actions-cell {
+    position: static;
+    display: flex;
+    width: 100% !important;
+    min-height: 0;
+    padding: 9px 0 10px;
+    border-top: 1px solid var(--line);
+    grid-column: 1 / -1;
+    grid-row: 6;
+    gap: 8px;
+    justify-content: stretch;
+  }
+
+  .channels-table .actions-cell .icon-button {
+    width: auto;
+    min-width: 0;
+    height: var(--touch-target);
+    flex: 1 1 0;
+    gap: 6px;
+    border-radius: 6px;
+    padding: 0 10px;
+  }
+
+  .channel-action-label {
+    display: inline;
   }
 
   .channels-workspace :deep(input),
