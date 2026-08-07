@@ -133,6 +133,7 @@ func NewRouterWithRuntime(deps Dependencies, runtimeState *Runtime) (*gin.Engine
 
 		v1.POST("/targets/:target_id/reconcile", s.reconcileTarget)
 		v1.POST("/targets/:target_id/drift/accept", s.acceptDrift)
+		v1.POST("/targets/:target_id/drift/restore", s.restoreDrift)
 	}
 
 	engine.NoRoute(func(c *gin.Context) {

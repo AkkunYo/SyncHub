@@ -638,6 +638,102 @@ func (s *server) acceptDrift(c *gin.Context) {
 	writeSuccess(c, http.StatusOK, gin.H{"mapping": *mapping})
 }
 
+func (s *server) restoreDrift(c *gin.Context) {
+	targetID := c.Param("target_id")
+	if validateNoQuery(c) != nil || validateIdentifier(targetID) != nil {
+		writeFailure(c, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	request, err := decodeStrictJSON[acceptDriftRequest](c)
+	if err != nil || validateIdentifier(request.UpstreamAssetID) != nil || validateIdentifier(request.ChannelID) != nil {
+		writeFailure(c, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	targetConfig, ok := targetByID(s.deps.Config.Snapshot(), targetID)
+	if !ok {
+		writeFailure(c, http.StatusNotFound, "target_not_found")
+		return
+	}
+	mappings, err := s.deps.Mappings.ListMappings(c.Request.Context(), targetID)
+	if err != nil {
+		respondDependencyError(c, err, internalError)
+		return
+	}
+	var mapping *platform.SyncMapping
+	for i := range mappings {
+		if mappings[i].TargetID == targetID && mappings[i].UpstreamAssetID == request.UpstreamAssetID && mappings[i].TargetChannelID == request.ChannelID {
+			candidate := mappings[i]
+			candidate.Snapshot.Models = append([]string(nil), candidate.Snapshot.Models...)
+			mapping = &candidate
+			break
+		}
+	}
+	if mapping == nil {
+		writeFailure(c, http.StatusNotFound, "channel_not_found")
+		return
+	}
+	target, _, err := s.deps.Adapters.ResolveTarget(c.Request.Context(), targetConfig)
+	if err != nil {
+		respondDependencyError(c, err, internalError)
+		return
+	}
+	channels, err := target.ListChannels(c.Request.Context())
+	if err != nil {
+		respondDependencyError(c, err, upstreamFailure)
+		return
+	}
+	var current *platform.Channel
+	for i := range channels {
+		if channels[i].ID == request.ChannelID {
+			channel := channels[i]
+			current = &channel
+			break
+		}
+	}
+	if current == nil {
+		writeFailure(c, http.StatusNotFound, "channel_not_found")
+		return
+	}
+	updated, err := target.UpdateChannel(c.Request.Context(), request.ChannelID, platform.UpdateChannelInput{
+		Name: current.Name, BaseURL: current.BaseURL,
+		Models: append([]string(nil), mapping.Snapshot.Models...), Group: mapping.Snapshot.Group,
+		Priority: mapping.Snapshot.Priority, Weight: mapping.Snapshot.Weight, Enabled: current.Enabled,
+	})
+	if err != nil {
+		respondDependencyError(c, err, upstreamFailure)
+		return
+	}
+	if updated.ID != request.ChannelID {
+		respondDependencyError(c, ErrUpstreamFailure, upstreamFailure)
+		return
+	}
+	key := runtimeKey{assetID: mapping.UpstreamAssetID, targetID: targetID}
+	report, err := s.runtime.CheckAndRecord(c.Request.Context(), s.deps.Reconcile, targetID, target)
+	if err != nil {
+		s.markNeedsReconcile(key, request.ChannelID)
+		writeFailure(c, http.StatusConflict, "needs_reconcile")
+		return
+	}
+	selectedSynced := false
+	for _, state := range report.Mappings {
+		candidate := state.Mapping
+		if candidate.TargetID == targetID && candidate.UpstreamAssetID == mapping.UpstreamAssetID && candidate.TargetChannelID == mapping.TargetChannelID {
+			selectedSynced = state.Status == reconcile.StatusSynced
+			break
+		}
+	}
+	if !selectedSynced {
+		writeFailure(c, http.StatusConflict, "needs_reconcile")
+		return
+	}
+	s.clearRuntimeState(key)
+	writeSuccess(c, http.StatusOK, gin.H{
+		"mapping": *mapping,
+		"channel": toManagedChannel(updated, mapping),
+		"report":  report,
+	})
+}
+
 func targetByID(cfg config.Config, targetID string) (config.TargetConfig, bool) {
 	for _, target := range cfg.Targets {
 		if target.ID == targetID {
