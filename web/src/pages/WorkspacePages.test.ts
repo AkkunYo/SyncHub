@@ -197,7 +197,11 @@ describe('workspace page information architecture', () => {
     expect(within(driftItem).getByText('100')).toBeInTheDocument()
     expect(within(driftItem).getByText('80')).toBeInTheDocument()
     expect(within(driftItem).getByText('100 -> 80')).toHaveClass('sr-only')
-    expect(driftItem).toHaveTextContent('采纳后将以目标平台当前值作为后续同步基线。')
+    expect(driftItem).toHaveTextContent('恢复会覆盖目标当前值；采纳会更新后续同步基线。')
+    expect(within(driftItem).getByRole('button', { name: '恢复 Primary key 在 Target Alpha 的期望状态' }))
+      .toHaveTextContent('恢复期望状态')
+    expect(within(driftItem).getByRole('button', { name: '采纳 Primary key 在 Target Alpha 的目标状态' }))
+      .toHaveTextContent('采纳目标状态')
   })
 
   it('explains what the latest clean drift scan means', () => {

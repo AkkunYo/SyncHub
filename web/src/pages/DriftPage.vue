@@ -1,23 +1,92 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, inject, ref } from 'vue'
 import { Check, Info, RefreshCw, RotateCcw, ScanSearch, TriangleAlert } from 'lucide-vue-next'
-import { RouterLink } from 'vue-router'
+import {
+  RouterLink,
+  routeLocationKey,
+  routerKey,
+  type LocationQueryRaw,
+} from 'vue-router'
 
 import { api, safeErrorMessage } from '@/api/client'
+import ModalDialog from '@/components/ModalDialog.vue'
 import { useConsoleStore } from '@/stores/console'
 import type { DriftItem } from '@/types'
 
+type DriftAction = 'restore' | 'accept'
+
+interface DriftConfirmation {
+  action: DriftAction
+  item: DriftItem
+}
+
 const store = useConsoleStore()
-const acceptingKeys = ref(new Set<string>())
+const route = inject(routeLocationKey, null)
+const router = inject(routerKey, null)
+const pendingKeys = ref(new Set<string>())
+const selectedTargetId = ref('')
+const confirmation = ref<DriftConfirmation | null>(null)
 const reconciling = ref(false)
 const notice = ref('')
 const error = ref('')
+
+function queryValue(key: string): string {
+  const value = route?.query[key]
+  if (value !== undefined) return Array.isArray(value) ? value[0] ?? '' : value ?? ''
+  return new URL(window.location.href).searchParams.get(key) ?? ''
+}
+
+function configuredUpstream(upstreamId: string): boolean {
+  return store.upstreams.some((upstream) => upstream.id === upstreamId)
+}
+
+function configuredTarget(targetId: string): boolean {
+  return store.targets.some((target) => target.id === targetId)
+}
+
+function updateFilterQuery(upstreamId: string, targetId: string): void {
+  if (router) {
+    const query: LocationQueryRaw = {}
+    if (upstreamId) query.upstream = upstreamId
+    if (targetId) query.target = targetId
+    void router.replace({ query })
+    return
+  }
+
+  const url = new URL(window.location.href)
+  url.search = ''
+  if (upstreamId) url.searchParams.set('upstream', upstreamId)
+  if (targetId) url.searchParams.set('target', targetId)
+  window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`)
+}
+
+const requestedUpstreamId = queryValue('upstream')
+const initialUpstreamId = configuredUpstream(requestedUpstreamId)
+  ? requestedUpstreamId
+  : configuredUpstream(store.selectedUpstreamId)
+    ? store.selectedUpstreamId
+    : store.upstreams[0]?.id ?? ''
+const requestedTargetId = queryValue('target')
+selectedTargetId.value = configuredTarget(requestedTargetId)
+  ? requestedTargetId
+  : configuredTarget(store.selectedTargetId)
+    ? store.selectedTargetId
+    : store.targets[0]?.id ?? ''
+store.selectedTargetId = selectedTargetId.value
+updateFilterQuery(initialUpstreamId, selectedTargetId.value)
+if (initialUpstreamId !== store.selectedUpstreamId) {
+  void store.loadMatrix(initialUpstreamId).catch(() => undefined)
+} else {
+  store.selectedUpstreamId = initialUpstreamId
+}
 
 const currentMatrix = computed(() =>
   store.matrix?.upstream_id === store.selectedUpstreamId ? store.matrix : null,
 )
 const visibleDriftItems = computed(() =>
-  store.matrixState === 'ready' && currentMatrix.value ? store.driftItems : [],
+  store.matrixState === 'ready' && currentMatrix.value && selectedTargetId.value
+    ? store.driftItems.filter((item) => item.targetId === selectedTargetId.value)
+    : [],
 )
 const driftSummaryReady = computed(() => store.matrixState === 'ready' && currentMatrix.value !== null)
 const currentUpstreamName = computed(() => {
@@ -43,30 +112,76 @@ function driftKey(item: DriftItem): string {
   return `${item.assetId}\u0000${item.targetId}`
 }
 
-async function accept(item: DriftItem): Promise<void> {
+function actionMeaning(action: DriftAction): string {
+  return action === 'restore'
+    ? '将上游期望状态重新写入目标平台，覆盖目标端当前状态。'
+    : '将目标平台当前状态采纳为后续同步基线，不会写回上游期望值。'
+}
+
+function openConfirmation(item: DriftItem, action: DriftAction): void {
   const key = driftKey(item)
-  if (acceptingKeys.value.has(key) || !currentMatrix.value) return
-  const matrix = currentMatrix.value
-  const upstreamId = store.selectedUpstreamId
-  acceptingKeys.value.add(key)
+  if (pendingKeys.value.has(key) || !currentMatrix.value) return
+  confirmation.value = { action, item }
+  notice.value = ''
+  error.value = ''
+}
+
+function closeConfirmation(): void {
+  confirmation.value = null
+}
+
+async function applyAction(item: DriftItem, action: DriftAction): Promise<void> {
+  const key = driftKey(item)
+  if (pendingKeys.value.has(key)) return
+  pendingKeys.value.add(key)
   notice.value = ''
   error.value = ''
   try {
-    await api.acceptDrift(item.targetId, {
+    const input = {
       upstream_asset_id: item.assetId,
       channel_id: item.channelId,
-    })
-    if (store.selectedUpstreamId === upstreamId && currentMatrix.value === matrix) {
-      store.markDriftAccepted(item.assetId, item.targetId)
-      notice.value = '漂移已接受'
     }
+    if (action === 'restore') await api.restoreDrift(item.targetId, input)
+    else await api.acceptDrift(item.targetId, input)
+
+    const currentUpstreamId = store.selectedUpstreamId
+    if (currentUpstreamId) await store.loadMatrix(currentUpstreamId)
+    notice.value = action === 'restore' ? '期望状态已恢复' : '目标状态已采纳'
   } catch (reason) {
-    if (store.selectedUpstreamId === upstreamId && currentMatrix.value === matrix) {
-      error.value = safeErrorMessage(reason)
-    }
+    error.value = safeErrorMessage(reason)
   } finally {
-    acceptingKeys.value.delete(key)
+    pendingKeys.value.delete(key)
   }
+}
+
+async function confirmAction(): Promise<void> {
+  const pending = confirmation.value
+  if (!pending) return
+  confirmation.value = null
+  await applyAction(pending.item, pending.action)
+}
+
+async function onUpstreamChange(event: Event): Promise<void> {
+  const upstreamId = (event.target as HTMLSelectElement).value
+  if (!configuredUpstream(upstreamId) || upstreamId === store.selectedUpstreamId) return
+  notice.value = ''
+  error.value = ''
+  updateFilterQuery(upstreamId, selectedTargetId.value)
+  try {
+    await store.loadMatrix(upstreamId)
+  } catch {
+    // The store exposes the sanitized error in the matrix state.
+  }
+}
+
+function onTargetChange(event: Event): void {
+  const targetId = (event.target as HTMLSelectElement).value
+  if (!configuredTarget(targetId)) return
+  selectedTargetId.value = targetId
+  store.selectedTargetId = targetId
+  notice.value = ''
+  error.value = ''
+  updateFilterQuery(store.selectedUpstreamId, targetId)
 }
 
 async function retryMatrix(): Promise<void> {
@@ -128,6 +243,37 @@ async function reconcileAll(): Promise<void> {
         </button>
       </div>
     </header>
+
+    <div class="drift-filter-bar" role="group" aria-label="漂移筛选">
+      <label class="drift-filter-control">
+        <span>上游</span>
+        <select
+          aria-label="选择上游"
+          :value="store.selectedUpstreamId"
+          :disabled="store.upstreams.length === 0 || store.matrixState === 'loading'"
+          @change="onUpstreamChange"
+        >
+          <option v-if="store.upstreams.length === 0" value="">暂无上游</option>
+          <option v-for="upstream in store.upstreams" :key="upstream.id" :value="upstream.id">
+            {{ upstream.name }}
+          </option>
+        </select>
+      </label>
+      <label class="drift-filter-control">
+        <span>目标</span>
+        <select
+          aria-label="选择目标"
+          :value="selectedTargetId"
+          :disabled="store.targets.length === 0"
+          @change="onTargetChange"
+        >
+          <option v-if="store.targets.length === 0" value="">暂无目标</option>
+          <option v-for="target in store.targets" :key="target.id" :value="target.id">
+            {{ target.name }}
+          </option>
+        </select>
+      </label>
+    </div>
 
     <p v-if="notice" class="notice notice-success" role="status">{{ notice }}</p>
     <p v-if="error" class="notice notice-error" role="alert">{{ error }}</p>
@@ -215,21 +361,68 @@ async function reconcileAll(): Promise<void> {
         <footer class="drift-row-action">
           <p>
             <Info :size="15" aria-hidden="true" />
-            采纳后将以目标平台当前值作为后续同步基线。
+            恢复会覆盖目标当前值；采纳会更新后续同步基线。
           </p>
-          <button
-            class="secondary-button"
-            type="button"
-            :disabled="acceptingKeys.has(driftKey(item))"
-            :aria-label="`接受 ${item.assetName} 在 ${item.targetName} 的目标端状态`"
-            @click="accept(item)"
-          >
-            <Check :size="16" aria-hidden="true" />
-            {{ acceptingKeys.has(driftKey(item)) ? '采纳中' : '采纳目标状态' }}
-          </button>
+          <div class="drift-row-buttons">
+            <button
+              class="secondary-button"
+              type="button"
+              :disabled="pendingKeys.has(driftKey(item))"
+              :aria-label="`恢复 ${item.assetName} 在 ${item.targetName} 的期望状态`"
+              @click="openConfirmation(item, 'restore')"
+            >
+              <RotateCcw :size="16" aria-hidden="true" />
+              恢复期望状态
+            </button>
+            <button
+              class="secondary-button"
+              type="button"
+              :disabled="pendingKeys.has(driftKey(item))"
+              :aria-label="`采纳 ${item.assetName} 在 ${item.targetName} 的目标状态`"
+              @click="openConfirmation(item, 'accept')"
+            >
+              <Check :size="16" aria-hidden="true" />
+              采纳目标状态
+            </button>
+          </div>
         </footer>
       </article>
     </div>
+
+    <ModalDialog
+      v-if="confirmation"
+      :title="confirmation.action === 'restore' ? '确认恢复期望状态' : '确认采纳目标状态'"
+      :close-label="confirmation.action === 'restore' ? '取消恢复期望状态' : '取消采纳目标状态'"
+      @close="closeConfirmation"
+    >
+      <div class="drift-confirmation">
+        <p>执行前请核对本次漂移处理范围。</p>
+        <dl class="drift-confirmation-details">
+          <div>
+            <dt>资产</dt>
+            <dd>{{ confirmation.item.assetName }}</dd>
+          </div>
+          <div>
+            <dt>目标</dt>
+            <dd>{{ confirmation.item.targetName }}</dd>
+          </div>
+          <div>
+            <dt>操作含义</dt>
+            <dd>{{ actionMeaning(confirmation.action) }}</dd>
+          </div>
+          <div>
+            <dt>字段差异</dt>
+            <dd>{{ confirmation.item.differences.length }} 项字段差异</dd>
+          </div>
+        </dl>
+        <footer class="drift-confirmation-actions">
+          <button class="secondary-button" type="button" @click="closeConfirmation">取消</button>
+          <button class="primary-button" type="button" @click="confirmAction">
+            {{ confirmation.action === 'restore' ? '确认恢复期望状态' : '确认采纳目标状态' }}
+          </button>
+        </footer>
+      </div>
+    </ModalDialog>
   </section>
 </template>
 
@@ -274,6 +467,28 @@ async function reconcileAll(): Promise<void> {
 
 .drift-scan-button {
   min-height: 44px;
+}
+
+.drift-filter-bar {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.drift-filter-control {
+  display: grid;
+  min-width: min(240px, 100%);
+  gap: 5px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.drift-filter-control select {
+  min-height: 40px;
 }
 
 .state-panel p {
@@ -413,6 +628,55 @@ async function reconcileAll(): Promise<void> {
   flex: 0 0 auto;
 }
 
+.drift-row-buttons {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.drift-confirmation {
+  display: grid;
+  gap: 14px;
+}
+
+.drift-confirmation > p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.drift-confirmation-details {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.drift-confirmation-details > div {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+}
+
+.drift-confirmation-details dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.drift-confirmation-details dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--ink);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.drift-confirmation-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 @media (max-width: 620px) {
   .drift-page-header {
     align-items: stretch;
@@ -426,6 +690,15 @@ async function reconcileAll(): Promise<void> {
   }
 
   .drift-header-actions .secondary-button {
+    width: 100%;
+  }
+
+  .drift-filter-bar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .drift-filter-control {
     width: 100%;
   }
 
@@ -455,8 +728,19 @@ async function reconcileAll(): Promise<void> {
     flex-direction: column;
   }
 
-  .drift-row-action .secondary-button {
+  .drift-row-buttons {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .drift-row-action .secondary-button,
+  .drift-row-buttons {
     width: 100%;
+  }
+
+  .drift-confirmation-details > div {
+    grid-template-columns: 1fr;
+    gap: 3px;
   }
 }
 </style>

@@ -137,13 +137,19 @@ afterEach(() => {
 describe('drift repair workflow', () => {
   it('loads the selected upstream and filters drift rows by URL-backed selectors', async () => {
     const user = userEvent.setup()
-    const { router, store } = await renderPage()
+    const { router, store } = await renderPage(
+      '/drift?upstream=source-a&target=target-a&access_token=sk-live-secret',
+    )
     const loadMatrix = vi.spyOn(store, 'loadMatrix').mockImplementation(async (upstreamId = '') => {
       store.selectedUpstreamId = upstreamId
       store.matrix = driftMatrix(upstreamId)
       store.matrixState = 'ready'
     })
 
+    await waitFor(() => expect(router.currentRoute.value.query).toEqual({
+      upstream: upstreamAlpha.id,
+      target: targetAlpha.id,
+    }))
     expect(screen.getByRole('combobox', { name: '选择上游' })).toHaveValue('source-a')
     expect(screen.getByRole('combobox', { name: '选择目标' })).toHaveValue('target-a')
     expect(screen.getByRole('article', { name: 'source-a primary / Target Alpha 配置漂移' })).toBeInTheDocument()

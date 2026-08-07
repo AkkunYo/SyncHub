@@ -203,6 +203,11 @@ export const api = {
   sync: (input: Record<string, unknown>) => request<SyncResponse>('/sync', { method: 'POST', body: input }),
   reconcile: (targetId: string) =>
     request<Record<string, unknown>>(`/targets/${segment(targetId)}/reconcile`, { method: 'POST' }),
+  restoreDrift: (targetId: string, input: { upstream_asset_id: string; channel_id: string }) =>
+    request<Record<string, unknown>>(`/targets/${segment(targetId)}/drift/restore`, {
+      method: 'POST',
+      body: input,
+    }),
   acceptDrift: (targetId: string, input: { upstream_asset_id: string; channel_id: string }) =>
     request<Record<string, unknown>>(`/targets/${segment(targetId)}/drift/accept`, {
       method: 'POST',
