@@ -57,7 +57,14 @@ describe('matrix action layout', () => {
     const refresh = declarationsFor(mobileRules, '.matrix-refresh-button')
 
     expect(viewportWidth).toBeLessThanOrEqual(breakpoint)
+    const toolbar = declarationsFor(
+      mobileRules,
+      '.sync-workspace :deep(.workspace-toolbar)',
+    )
+
+    expect(toolbar).toContain('grid-template-columns: minmax(0, 1fr);')
     expect(actions).toContain('grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) 44px;')
+    expect(actions).toContain('justify-self: stretch;')
     expect(search).toContain('grid-column: 1 / -1;')
     expect(upstream).toContain('min-width: 0;')
     expect(status).toContain('min-width: 0;')
