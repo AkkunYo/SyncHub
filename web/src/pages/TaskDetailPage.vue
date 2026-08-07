@@ -33,7 +33,7 @@ function typeLabel(type: string): string {
 }
 
 function itemIdentifier(item: TaskHistoryItem): string {
-  return String(item.item_id ?? item.asset_id ?? item.target_id ?? item.scope ?? '--')
+  return String(item.item_id ?? item.asset_id ?? item.key_id ?? item.target_id ?? item.scope ?? '--')
 }
 
 function itemMessage(item: TaskHistoryItem): string {

@@ -149,6 +149,7 @@ export interface TaskSummary {
 export interface TaskHistoryItem {
   item_id?: string
   asset_id?: string
+  key_id?: string
   target_id?: string
   scope?: string
   status?: string
