@@ -1,3 +1,34 @@
+<script lang="ts">
+type ModalToken = symbol
+
+const modalStack: ModalToken[] = []
+let previousHtmlOverflow = ''
+let previousBodyOverflow = ''
+
+function registerModal(token: ModalToken): void {
+  if (modalStack.length === 0) {
+    previousHtmlOverflow = document.documentElement.style.overflow
+    previousBodyOverflow = document.body.style.overflow
+    document.documentElement.style.overflow = 'hidden'
+    document.body.style.overflow = 'hidden'
+  }
+  modalStack.push(token)
+}
+
+function unregisterModal(token: ModalToken): void {
+  const index = modalStack.indexOf(token)
+  if (index === -1) return
+  modalStack.splice(index, 1)
+  if (modalStack.length > 0) return
+  document.documentElement.style.overflow = previousHtmlOverflow
+  document.body.style.overflow = previousBodyOverflow
+}
+
+function isTopmostModal(token: ModalToken): boolean {
+  return modalStack.at(-1) === token
+}
+</script>
+
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, useId } from 'vue'
 import { X } from 'lucide-vue-next'
@@ -20,9 +51,7 @@ const emit = defineEmits<{
 const panel = ref<HTMLElement | null>(null)
 const titleId = useId()
 let previousFocus: HTMLElement | null = null
-let openDialogCount = 0
-let previousHtmlOverflow = ''
-let previousBodyOverflow = ''
+const modalToken = Symbol('ModalDialog')
 
 const focusableSelector = [
   'a[href]',
@@ -37,25 +66,8 @@ function close(): void {
   emit('close')
 }
 
-function lockBackgroundScroll(): void {
-  if (openDialogCount === 0) {
-    previousHtmlOverflow = document.documentElement.style.overflow
-    previousBodyOverflow = document.body.style.overflow
-    document.documentElement.style.overflow = 'hidden'
-    document.body.style.overflow = 'hidden'
-  }
-  openDialogCount += 1
-}
-
-function unlockBackgroundScroll(): void {
-  if (openDialogCount === 0) return
-  openDialogCount -= 1
-  if (openDialogCount > 0) return
-  document.documentElement.style.overflow = previousHtmlOverflow
-  document.body.style.overflow = previousBodyOverflow
-}
-
 function onKeydown(event: KeyboardEvent): void {
+  if (!isTopmostModal(modalToken)) return
   if (event.key === 'Escape') {
     close()
     return
@@ -81,14 +93,14 @@ function onKeydown(event: KeyboardEvent): void {
 
 onMounted(() => {
   previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
-  lockBackgroundScroll()
+  registerModal(modalToken)
   document.addEventListener('keydown', onKeydown)
   panel.value?.focus()
 })
 
 onUnmounted(() => {
   document.removeEventListener('keydown', onKeydown)
-  unlockBackgroundScroll()
+  unregisterModal(modalToken)
   if (previousFocus?.isConnected) previousFocus.focus()
 })
 </script>
