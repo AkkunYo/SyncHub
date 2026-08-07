@@ -209,6 +209,7 @@ describe('SyncHub API client', () => {
     await api.getMatrix('source/a')
     await api.sync({ asset_id: 'asset-a' })
     await api.reconcile('target/a')
+    await api.restoreDrift('target/a', { upstream_asset_id: 'asset-a', channel_id: 'channel/1' })
     await api.acceptDrift('target/a', { upstream_asset_id: 'asset-a', channel_id: 'channel/1' })
 
     const routes = fetchMock.mock.calls.map(([input, options]) => `${options.method ?? 'GET'} ${String(input)}`)
@@ -237,6 +238,7 @@ describe('SyncHub API client', () => {
       'GET /api/v1/matrix?upstream_id=source%2Fa',
       'POST /api/v1/sync',
       'POST /api/v1/targets/target%2Fa/reconcile',
+      'POST /api/v1/targets/target%2Fa/drift/restore',
       'POST /api/v1/targets/target%2Fa/drift/accept',
     ])
   })

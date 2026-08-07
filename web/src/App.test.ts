@@ -776,9 +776,13 @@ describe('SyncHub console', () => {
         ],
       },
     ]
+    let matrixReads = 0
     const fetchMock = installFetch((url, init) => {
       if (url.pathname === '/api/v1/config') return envelope(config)
-      if (url.pathname === '/api/v1/matrix') return envelope(matrix(driftRows))
+      if (url.pathname === '/api/v1/matrix') {
+        matrixReads += 1
+        return envelope(matrix(matrixReads === 1 ? driftRows : []))
+      }
       if (url.pathname === '/api/v1/targets/target-a/drift/accept' && init.method === 'POST') {
         return envelope({ status: 'synced' })
       }
@@ -793,10 +797,17 @@ describe('SyncHub console', () => {
     expect(screen.getByRole('heading', { name: '配置漂移' })).toBeInTheDocument()
     expect(screen.getByText('权重')).toBeInTheDocument()
     expect(screen.getByText('100 -> 80')).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: '接受 OpenAI primary 在 Target Alpha 的目标端状态' }))
+    await user.click(screen.getByRole('button', { name: '采纳 OpenAI primary 在 Target Alpha 的目标状态' }))
 
-    expect(await screen.findByText('漂移已接受')).toBeInTheDocument()
+    const dialog = screen.getByRole('dialog', { name: '确认采纳目标状态' })
+    expect(dialog).toHaveTextContent('OpenAI primary')
+    expect(dialog).toHaveTextContent('Target Alpha')
+    expect(dialog).toHaveTextContent('1 项字段差异')
+    await user.click(within(dialog).getByRole('button', { name: '确认采纳目标状态' }))
+
+    expect(await screen.findByText('目标状态已采纳')).toBeInTheDocument()
     expect(screen.getByText('当前没有配置漂移')).toBeInTheDocument()
+    expect(matrixReads).toBe(2)
     const acceptCall = fetchMock.mock.calls.find(([input]) => String(input).includes('/drift/accept'))
     expect(JSON.parse(String(acceptCall?.[1]?.body))).toEqual({
       upstream_asset_id: assetOne.id,
