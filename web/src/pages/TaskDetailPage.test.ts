@@ -80,6 +80,27 @@ describe('TaskDetailPage', () => {
     expect(within(table).getAllByText('查看字段')).toHaveLength(2)
   })
 
+  it('renders a discovery key ID as the visible result identifier', async () => {
+    vi.spyOn(api, 'getTask').mockResolvedValue({
+      ...task,
+      type: 'discover',
+      scope: 'key discovery',
+      status: 'failed',
+      summary: { total: 1, succeeded: 0, failed: 1 },
+      items: [
+        {
+          key_id: '1061',
+          status: 'authentication_failed',
+          error_code: 'authentication_failed',
+        },
+      ],
+    })
+    await renderPage()
+
+    const table = await screen.findByRole('table', { name: '任务结果' })
+    expect(within(table).getByRole('cell', { name: '1061' })).toHaveAttribute('data-label', '结果 ID')
+  })
+
   it('renders a titled empty result explanation', async () => {
     vi.spyOn(api, 'getTask').mockResolvedValue({
       ...task,
