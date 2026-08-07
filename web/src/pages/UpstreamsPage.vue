@@ -115,6 +115,10 @@ function keyCount(upstream: UpstreamConfig): number {
   return upstream.keys?.length ?? 0
 }
 
+function hasKeySummary(upstream: UpstreamConfig): boolean {
+  return Array.isArray(upstream.keys)
+}
+
 function enabledKeyCount(upstream: UpstreamConfig): number {
   return upstream.keys?.filter((key) => key.enabled).length ?? 0
 }
@@ -379,11 +383,18 @@ async function testConnection(upstream: UpstreamConfig): Promise<void> {
                 <span class="endpoint" :title="upstream.base_url">{{ displayEndpoint(upstream.base_url) }}</span>
               </td>
               <td data-label="Key / 模型">
-                <div v-if="keyCount(upstream) > 0" class="summary-cell">
-                  <strong>{{ enabledKeyCount(upstream) }} / {{ keyCount(upstream) }} 启用</strong>
+                <div v-if="hasKeySummary(upstream)" class="summary-cell">
+                  <strong v-if="keyCount(upstream) > 0">{{ enabledKeyCount(upstream) }} / {{ keyCount(upstream) }} 启用</strong>
+                  <strong v-else>0 Key</strong>
                   <span>{{ modelCount(upstream) }} 个模型</span>
                 </div>
-                <span v-else class="muted-value">待发现</span>
+                <RouterLink
+                  v-else
+                  class="muted-value summary-link"
+                  :to="{ name: 'upstream-detail', params: { id: upstream.id } }"
+                >
+                  进入详情查看
+                </RouterLink>
               </td>
               <td data-label="验证">
                 <div class="validation-cell">
@@ -412,6 +423,7 @@ async function testConnection(upstream: UpstreamConfig): Promise<void> {
                     @click="testConnection(upstream)"
                   >
                     <RefreshCw :class="{ spin: connectionState(upstream.id).state === 'testing' }" :size="16" aria-hidden="true" />
+                    <span class="action-label">验证</span>
                   </button>
                   <button
                     class="icon-button icon-button-small"
@@ -421,6 +433,7 @@ async function testConnection(upstream: UpstreamConfig): Promise<void> {
                     @click="openEdit(upstream)"
                   >
                     <Pencil :size="16" aria-hidden="true" />
+                    <span class="action-label">编辑</span>
                   </button>
                   <RouterLink
                     class="icon-button icon-button-small"
@@ -429,6 +442,7 @@ async function testConnection(upstream: UpstreamConfig): Promise<void> {
                     title="查看详情"
                   >
                     <ArrowRight :size="16" aria-hidden="true" />
+                    <span class="action-label">详情</span>
                   </RouterLink>
                 </div>
               </td>
@@ -561,9 +575,8 @@ async function testConnection(upstream: UpstreamConfig): Promise<void> {
 
 <style scoped>
 .connections-page {
-  display: flex;
-  min-height: calc(100svh - var(--app-header-height) - 48px);
-  flex-direction: column;
+  display: block;
+  min-height: 0;
 }
 
 .connections-header > div {
@@ -644,8 +657,8 @@ async function testConnection(upstream: UpstreamConfig): Promise<void> {
 
 .connection-surface {
   display: flex;
-  min-height: 260px;
-  flex: 1 1 auto;
+  min-height: 0;
+  flex: none;
   flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--line);
@@ -655,7 +668,7 @@ async function testConnection(upstream: UpstreamConfig): Promise<void> {
 
 .table-wrap {
   min-height: 0;
-  flex: 1 1 auto;
+  flex: none;
   overflow: auto;
 }
 
@@ -770,6 +783,17 @@ async function testConnection(upstream: UpstreamConfig): Promise<void> {
   font-size: 11px;
 }
 
+.summary-link {
+  display: inline-flex;
+  width: fit-content;
+  text-decoration: none;
+}
+
+.summary-link:hover {
+  color: var(--blue);
+  text-decoration: underline;
+}
+
 .connection-status {
   padding: 3px 7px;
   color: #52525b;
@@ -807,6 +831,10 @@ async function testConnection(upstream: UpstreamConfig): Promise<void> {
 
 .row-actions {
   justify-content: flex-end;
+}
+
+.action-label {
+  display: none;
 }
 
 .connection-state {
@@ -1022,6 +1050,11 @@ async function testConnection(upstream: UpstreamConfig): Promise<void> {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
   }
 
+  .search-control input,
+  .filter-control select {
+    min-height: 44px;
+  }
+
   .search-control {
     grid-column: 1 / -1;
   }
@@ -1050,6 +1083,11 @@ async function testConnection(upstream: UpstreamConfig): Promise<void> {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
     padding-bottom: 10px;
+  }
+
+  .search-control input,
+  .filter-control select {
+    min-height: 44px;
   }
 
   .filter-control {
@@ -1082,10 +1120,10 @@ async function testConnection(upstream: UpstreamConfig): Promise<void> {
 
   .connection-table tr {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    padding: 14px 12px 12px;
+    grid-template-columns: minmax(0, 1fr);
+    padding: 4px 0;
     border-bottom: 1px solid var(--line);
-    gap: 10px 14px;
+    gap: 0;
   }
 
   .connection-table tbody tr:last-child {
@@ -1093,44 +1131,53 @@ async function testConnection(upstream: UpstreamConfig): Promise<void> {
   }
 
   .connection-table td {
-    display: block;
+    display: grid;
     height: auto;
-    padding: 0;
+    min-width: 0;
+    grid-template-columns: 68px minmax(0, 1fr);
+    align-items: start;
+    gap: 12px;
+    padding: 9px 12px;
     border: 0;
   }
 
-  .connection-table td:nth-child(1),
-  .connection-table td:nth-child(3) {
+  .connection-table td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 650;
+    line-height: 1.6;
+  }
+
+  .connection-table td + td {
+    border-top: 1px solid #f4f4f5;
+  }
+
+  .connection-table td:nth-child(n) {
+    grid-row: auto;
     grid-column: 1;
+    justify-self: stretch;
+    margin: 0;
   }
 
-  .connection-table td:nth-child(2) {
-    grid-row: 1;
-    grid-column: 2;
+  .primary-cell,
+  .summary-cell,
+  .validation-cell,
+  .type-badge,
+  .endpoint,
+  .muted-value,
+  .row-actions {
+    min-width: 0;
   }
 
-  .connection-table td:nth-child(3) {
-    grid-row: 2;
-    grid-column: 1 / -1;
-  }
-
-  .connection-table td:nth-child(4) {
-    grid-row: 3;
-    grid-column: 1;
-  }
-
-  .connection-table td:nth-child(5) {
-    grid-row: 3;
-    grid-column: 2;
-    justify-self: end;
-  }
-
-  .connection-table td:nth-child(6) {
-    grid-row: 4;
-    grid-column: 1 / -1;
-    margin-top: 2px;
-    padding-top: 10px;
-    border-top: 1px solid var(--line);
+  .primary-cell a,
+  .primary-cell code,
+  .endpoint {
+    overflow: visible;
+    max-width: 100%;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+    white-space: normal;
   }
 
   .row-actions {
@@ -1143,6 +1190,12 @@ async function testConnection(upstream: UpstreamConfig): Promise<void> {
   .row-actions .icon-button {
     width: 100%;
     height: 44px;
+    min-height: 44px;
+    gap: 6px;
+  }
+
+  .action-label {
+    display: inline;
   }
 
   .preset-options {

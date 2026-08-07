@@ -20,6 +20,9 @@ const emit = defineEmits<{
 const panel = ref<HTMLElement | null>(null)
 const titleId = useId()
 let previousFocus: HTMLElement | null = null
+let openDialogCount = 0
+let previousHtmlOverflow = ''
+let previousBodyOverflow = ''
 
 const focusableSelector = [
   'a[href]',
@@ -32,6 +35,24 @@ const focusableSelector = [
 
 function close(): void {
   emit('close')
+}
+
+function lockBackgroundScroll(): void {
+  if (openDialogCount === 0) {
+    previousHtmlOverflow = document.documentElement.style.overflow
+    previousBodyOverflow = document.body.style.overflow
+    document.documentElement.style.overflow = 'hidden'
+    document.body.style.overflow = 'hidden'
+  }
+  openDialogCount += 1
+}
+
+function unlockBackgroundScroll(): void {
+  if (openDialogCount === 0) return
+  openDialogCount -= 1
+  if (openDialogCount > 0) return
+  document.documentElement.style.overflow = previousHtmlOverflow
+  document.body.style.overflow = previousBodyOverflow
 }
 
 function onKeydown(event: KeyboardEvent): void {
@@ -60,12 +81,14 @@ function onKeydown(event: KeyboardEvent): void {
 
 onMounted(() => {
   previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  lockBackgroundScroll()
   document.addEventListener('keydown', onKeydown)
   panel.value?.focus()
 })
 
 onUnmounted(() => {
   document.removeEventListener('keydown', onKeydown)
+  unlockBackgroundScroll()
   if (previousFocus?.isConnected) previousFocus.focus()
 })
 </script>
