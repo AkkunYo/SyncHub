@@ -262,6 +262,28 @@ describe('Connection resource details', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  it('renders target capability modes as distinct chips', async () => {
+    vi.stubGlobal('fetch', vi.fn())
+    const verifiedConfig = {
+      ...config,
+      targets: [{
+        ...target,
+        validation_status: 'verified',
+        validation_capabilities: {
+          platform: 'newapi',
+          providers: { openai: { modes: ['static_key', 'proxy_endpoint'] } },
+        },
+      }],
+    } as SanitizedConfig
+
+    await renderDetail('target', 'source-generic', verifiedConfig)
+
+    const capabilities = screen.getByRole('region', { name: '目标能力' })
+    const modes = within(capabilities).getByRole('list', { name: '目标支持模式' })
+    expect(within(modes).getAllByRole('listitem').map((item) => item.textContent))
+      .toEqual(['static_key', 'proxy_endpoint'])
+  })
+
   it('keeps the persisted successful target summary when a retest request fails', async () => {
     const verifiedTarget: SanitizedConfig['targets'][number] = {
       ...target,
@@ -606,6 +628,24 @@ describe('resource detail responsive model management layout', () => {
     expect(actionButtons).toContain('flex: 0 0 auto;')
     expect(actionButtons).toContain('white-space: nowrap;')
     expect(actionLabels).toContain('display: inline;')
+  })
+
+  it('keeps an odd target capability summary from leaving a blank 320px grid cell', () => {
+    const viewportWidth = 320
+    const mobileRules = blockFor(resourceDetailSource, '@media (max-width: 720px)')
+    const modeGroup = declarationsFor(resourceDetailSource, '.capability-modes')
+    const modeChips = declarationsFor(resourceDetailSource, '.capability-modes code')
+    const oddLastItem = declarationsFor(
+      mobileRules,
+      '.capability-grid > div:last-child:nth-child(odd)',
+    )
+
+    expect(viewportWidth).toBeLessThanOrEqual(720)
+    expect(modeGroup).toContain('display: flex;')
+    expect(modeGroup).toContain('flex-wrap: wrap;')
+    expect(modeGroup).toContain('gap: 4px;')
+    expect(modeChips).toContain('display: inline-flex;')
+    expect(oddLastItem).toContain('grid-column: 1 / -1;')
   })
 
   it.each([320, 390])('keeps model discovery controls inside a %ipx modal', (viewportWidth) => {
