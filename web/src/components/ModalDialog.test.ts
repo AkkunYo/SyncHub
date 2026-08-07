@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/vue'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import ModalDialog from './ModalDialog.vue'
 
@@ -84,6 +84,87 @@ describe('ModalDialog', () => {
       outer?.unmount()
       html.style.overflow = previousHtmlOverflow
       document.body.style.overflow = previousBodyOverflow
+    }
+  })
+
+  it('keeps background scrolling locked when the outer dialog closes first', () => {
+    const html = document.documentElement
+    const previousHtmlOverflow = html.style.overflow
+    const previousBodyOverflow = document.body.style.overflow
+    html.style.overflow = 'clip'
+    document.body.style.overflow = 'scroll'
+
+    let outer: ReturnType<typeof render> | undefined
+    let inner: ReturnType<typeof render> | undefined
+    try {
+      outer = render(ModalDialog, { props: { title: '外层对话框' } })
+      inner = render(ModalDialog, { props: { title: '内层对话框' } })
+
+      outer.unmount()
+      outer = undefined
+      expect(html.style.overflow).toBe('hidden')
+      expect(document.body.style.overflow).toBe('hidden')
+
+      inner.unmount()
+      inner = undefined
+      expect(html.style.overflow).toBe('clip')
+      expect(document.body.style.overflow).toBe('scroll')
+    } finally {
+      inner?.unmount()
+      outer?.unmount()
+      html.style.overflow = previousHtmlOverflow
+      document.body.style.overflow = previousBodyOverflow
+    }
+  })
+
+  it('only dismisses the topmost nested dialog with Escape', async () => {
+    let outer: ReturnType<typeof render> | undefined
+    let inner: ReturnType<typeof render> | undefined
+    try {
+      outer = render(ModalDialog, { props: { title: '外层对话框' } })
+      inner = render(ModalDialog, { props: { title: '内层对话框' } })
+
+      await fireEvent.keyDown(document, { key: 'Escape' })
+
+      expect(outer.emitted('close')).toBeUndefined()
+      expect(inner.emitted('close')).toHaveLength(1)
+    } finally {
+      inner?.unmount()
+      outer?.unmount()
+    }
+  })
+
+  it('traps Tab only in the topmost nested dialog', async () => {
+    let outer: ReturnType<typeof render> | undefined
+    let inner: ReturnType<typeof render> | undefined
+    try {
+      outer = render(ModalDialog, {
+        props: { title: '外层对话框' },
+        slots: { default: '<button type="button">外层操作</button>' },
+      })
+      inner = render(ModalDialog, {
+        props: { title: '内层对话框' },
+        slots: { default: '<button type="button">内层操作</button>' },
+      })
+
+      const outerFirst = screen.getAllByRole('button', { name: '关闭对话框' })[0] as HTMLElement
+      const innerLast = screen.getByRole('button', { name: '内层操作' })
+      outerFirst.focus()
+      const event = new KeyboardEvent('keydown', {
+        key: 'Tab',
+        shiftKey: true,
+        cancelable: true,
+      })
+      const preventDefault = vi.spyOn(event, 'preventDefault')
+
+      document.dispatchEvent(event)
+
+      expect(event.defaultPrevented).toBe(true)
+      expect(preventDefault).toHaveBeenCalledTimes(1)
+      expect(innerLast).toHaveFocus()
+    } finally {
+      inner?.unmount()
+      outer?.unmount()
     }
   })
 })
