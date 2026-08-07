@@ -735,7 +735,7 @@ function capabilityLabel(value: string): string {
         aria-labelledby="upstream-keys-tab"
       >
         <header class="panel-toolbar">
-          <div>
+          <div class="panel-heading">
             <h2>Key 与模型</h2>
             <span v-if="keysState === 'loading'">正在加载</span>
             <span v-else-if="keysState === 'error'">加载失败</span>
@@ -743,7 +743,7 @@ function capabilityLabel(value: string): string {
           </div>
           <div class="panel-actions">
             <button
-              class="icon-button icon-button-small"
+              class="icon-button icon-button-small key-list-refresh"
               type="button"
               aria-label="重新加载 Key 列表"
               title="重新加载 Key 列表"
@@ -751,6 +751,7 @@ function capabilityLabel(value: string): string {
               @click="loadKeys"
             >
               <RefreshCw :class="{ spin: keysState === 'loading' }" :size="15" aria-hidden="true" />
+              <span class="key-list-refresh-label">刷新列表</span>
             </button>
             <button
               v-if="upstreamResource?.type === 'generic'"
@@ -823,7 +824,7 @@ function capabilityLabel(value: string): string {
                 <td data-label="操作">
                   <div class="key-actions">
                     <button
-                      class="icon-button icon-button-small"
+                      class="icon-button icon-button-small key-action-button"
                       type="button"
                       :aria-label="`刷新 ${key.name} 模型`"
                       title="刷新模型"
@@ -831,25 +832,28 @@ function capabilityLabel(value: string): string {
                       @click="refreshModels(key)"
                     >
                       <RefreshCw :size="15" aria-hidden="true" />
+                      <span class="key-action-label">刷新模型</span>
                     </button>
                     <button
-                      class="icon-button icon-button-small"
+                      class="icon-button icon-button-small key-action-button"
                       type="button"
                       :aria-label="`查看 ${key.name} 模型`"
                       title="查看模型"
                       @click="openModels(key)"
                     >
                       <Eye :size="15" aria-hidden="true" />
+                      <span class="key-action-label">查看模型</span>
                     </button>
                     <button
                       v-if="upstreamResource?.type === 'generic'"
-                      class="icon-button icon-button-small"
+                      class="icon-button icon-button-small key-action-button"
                       type="button"
                       :aria-label="`编辑 Key ${key.name}`"
                       title="编辑 Key"
                       @click="openEditKey(key)"
                     >
                       <Pencil :size="15" aria-hidden="true" />
+                      <span class="key-action-label">编辑 Key</span>
                     </button>
                   </div>
                 </td>
@@ -1138,7 +1142,7 @@ function capabilityLabel(value: string): string {
             <span v-else-if="modelSnapshot?.snapshot_scope === 'persisted'" class="scope-badge is-persisted">已保存</span>
           </div>
           <button
-            class="secondary-button"
+            class="secondary-button models-refresh-button"
             type="button"
             :disabled="discoveryRunning || probingModels.size > 0"
             aria-label="刷新模型"
@@ -1149,19 +1153,11 @@ function capabilityLabel(value: string): string {
           </button>
         </header>
 
-        <div class="probe-cost-notice" role="note">
-          <FlaskConical :size="17" aria-hidden="true" />
-          <div>
-            <strong>本次请求可能产生真实费用</strong>
-            <span>输入约 20-50 Token / 输出最多 64 Token</span>
-          </div>
-        </div>
-
         <p v-if="discoveryNotice" class="model-notice" role="status">{{ discoveryNotice }}</p>
         <p v-if="discoveryWarning" class="model-warning" role="alert">{{ discoveryWarning }}</p>
         <p v-if="modelsError" class="model-warning" role="alert">{{ modelsError }}</p>
 
-        <div class="models-filter-bar">
+        <div class="models-filter-bar" role="group" aria-label="模型筛选与排序">
           <label class="model-search">
             <Search :size="15" aria-hidden="true" />
             <span class="sr-only">搜索当前 Key 的模型</span>
@@ -1223,10 +1219,20 @@ function capabilityLabel(value: string): string {
             重试模型列表
           </button>
         </div>
-        <div v-else-if="modelSnapshot && modelSnapshot.models.length === 0" class="model-state">
+        <div
+          v-else-if="modelSnapshot && modelSnapshot.models.length === 0"
+          class="model-state"
+          role="status"
+          aria-label="当前 Key 没有模型"
+        >
           <strong>当前 Key 没有模型</strong>
         </div>
-        <div v-else-if="modelSnapshot && filteredModels.length === 0" class="model-state">
+        <div
+          v-else-if="modelSnapshot && filteredModels.length === 0"
+          class="model-state"
+          role="status"
+          aria-label="没有匹配的模型"
+        >
           <strong>没有匹配的模型</strong>
         </div>
         <div v-else-if="modelSnapshot" class="model-table-wrap">
@@ -1496,8 +1502,10 @@ function capabilityLabel(value: string): string {
   border-bottom: 1px solid var(--line);
 }
 
-.panel-toolbar > div:first-child {
+.panel-toolbar > div:first-child,
+.panel-heading {
   display: flex;
+  min-width: 0;
   align-items: baseline;
   gap: 8px;
 }
@@ -1514,8 +1522,19 @@ function capabilityLabel(value: string): string {
 
 .panel-actions {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 8px;
+}
+
+.panel-heading h2,
+.panel-heading span {
+  white-space: nowrap;
+}
+
+.key-list-refresh-label,
+.key-action-label {
+  display: none;
 }
 
 .detail-table-wrap { overflow-x: auto; }
@@ -1578,6 +1597,8 @@ function capabilityLabel(value: string): string {
   justify-content: flex-end;
   gap: 4px;
 }
+
+.key-action-button { gap: 6px; }
 
 .key-load-state {
   display: flex;
@@ -1782,6 +1803,9 @@ function capabilityLabel(value: string): string {
 
 .models-panel {
   display: grid;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   min-height: 100%;
   align-content: start;
   gap: 12px;
@@ -1790,6 +1814,8 @@ function capabilityLabel(value: string): string {
 .models-command-bar,
 .models-filter-bar {
   display: flex;
+  width: 100%;
+  min-width: 0;
   min-height: 44px;
   align-items: center;
   justify-content: space-between;
@@ -1891,6 +1917,7 @@ function capabilityLabel(value: string): string {
 
 .model-filter {
   display: flex;
+  min-width: 0;
   flex: 0 0 auto;
   align-items: center;
   gap: 7px;
@@ -1900,6 +1927,8 @@ function capabilityLabel(value: string): string {
 
 .model-filter select,
 .model-table select {
+  min-width: 0;
+  max-width: 100%;
   min-height: 36px;
   border: 1px solid var(--line-strong);
   border-radius: 6px;
@@ -1910,7 +1939,8 @@ function capabilityLabel(value: string): string {
 
 .model-state {
   display: grid;
-  min-height: 180px;
+  width: 100%;
+  min-height: min(180px, 32vh);
   place-items: center;
   align-content: center;
   gap: 9px;
@@ -2024,8 +2054,30 @@ function capabilityLabel(value: string): string {
   .resource-header { align-items: flex-start; }
   .resource-strip { grid-template-columns: 1fr; gap: 10px; }
   .detail-tabs { gap: 16px; overflow-x: auto; }
-  .panel-toolbar { align-items: flex-start; }
-  .panel-actions { flex-wrap: wrap; justify-content: flex-end; }
+  .panel-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .panel-heading {
+    width: 100%;
+    flex-wrap: nowrap;
+  }
+  .panel-actions {
+    display: grid;
+    width: 100%;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .panel-actions > .secondary-button,
+  .panel-actions > .primary-button { min-width: 0; justify-content: center; }
+  .panel-actions > .primary-button { grid-column: 1 / -1; }
+  .key-list-refresh {
+    width: auto;
+    min-height: 44px;
+    gap: 6px;
+    border-radius: 6px;
+    padding: 0 10px;
+  }
+  .key-list-refresh-label { display: inline; }
   .detail-table-wrap { overflow: visible; }
   .key-table,
   .key-table tbody { display: block; }
@@ -2042,11 +2094,22 @@ function capabilityLabel(value: string): string {
   .key-table td:nth-child(3),
   .key-table td:nth-child(4),
   .key-table td:nth-child(5) { grid-column: 1; }
-  .key-table td:nth-child(2),
-  .key-table td:nth-child(6) { grid-column: 2; }
+  .key-table td:nth-child(2) { grid-column: 2; }
   .key-table td:nth-child(2) { grid-row: 1; }
-  .key-table td:nth-child(6) { grid-row: 2 / span 3; }
-  .key-actions { min-width: 40px; flex-direction: column; }
+  .key-table td:nth-child(6) { grid-column: 1 / -1; }
+  .key-actions {
+    width: 100%;
+    min-width: 0;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+  .key-action-button {
+    width: auto;
+    min-height: 44px;
+    border-radius: 6px;
+    padding: 0 10px;
+  }
+  .key-action-label { display: inline; }
   .overview-status,
   .overview-entry { align-items: flex-start; flex-wrap: wrap; }
   .overview-status > button,
@@ -2054,39 +2117,47 @@ function capabilityLabel(value: string): string {
   .capability-grid { grid-template-columns: 1fr 1fr; }
   .settings-list > div { grid-template-columns: 100px minmax(0, 1fr); }
 
-  .models-command-bar,
-  .models-filter-bar {
+  .models-command-bar {
+    display: grid;
+    width: 100%;
     min-height: 44px;
+    align-items: center;
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
-  .models-command-bar {
-    align-items: center;
-  }
+  .models-command-bar > * { min-width: 0; }
 
   .models-command-bar .secondary-button {
+    max-width: 100%;
     min-height: 44px;
     flex: 0 0 auto;
   }
 
   .models-filter-bar {
-    align-items: center;
-    flex-direction: row;
+    display: grid;
+    width: 100%;
+    min-height: 44px;
+    align-items: end;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .models-filter-bar > * { min-width: 0; }
+
+  .model-search {
+    width: 100%;
+    grid-column: 1 / -1;
   }
 
   .model-filter {
-    width: 136px;
-    flex: 0 0 136px;
+    display: grid;
+    width: 100%;
+    min-width: 0;
+    flex: none;
+    align-items: stretch;
+    gap: 4px;
   }
 
-  .model-filter > span {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-  }
-
-  .model-filter select { width: 100%; }
+  .model-filter select { width: 100%; min-width: 0; }
   .model-search input,
   .model-filter select { min-height: 44px; }
 
@@ -2117,6 +2188,25 @@ function capabilityLabel(value: string): string {
   .model-table td:nth-child(5) { grid-row: 3; }
   .model-table select,
   .model-probe-button { min-height: 44px; }
+}
+
+@media (max-width: 380px) {
+  .models-command-bar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .models-command-bar .secondary-button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .snapshot-meta { flex-wrap: wrap; }
+
+  .models-filter-bar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .model-search { grid-column: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {
