@@ -1292,11 +1292,13 @@ function matrixStatusLabel(status: string): string {
   }
 
   .sync-workspace :deep(.workspace-toolbar) {
+    grid-template-columns: minmax(0, 1fr);
     padding: 10px;
   }
 
   .matrix-page-actions {
     align-items: center;
+    justify-self: stretch;
     grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) 44px;
   }
 
