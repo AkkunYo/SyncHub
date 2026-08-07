@@ -2106,8 +2106,10 @@ function capabilityLabel(value: string): string {
   .key-action-button {
     width: auto;
     min-height: 44px;
+    flex: 0 0 auto;
     border-radius: 6px;
     padding: 0 10px;
+    white-space: nowrap;
   }
   .key-action-label { display: inline; }
   .overview-status,
