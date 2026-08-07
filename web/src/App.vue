@@ -40,13 +40,37 @@ function savedSidebarState(): boolean {
 
 const sidebarCollapsed = ref(savedSidebarState())
 
-const navItems = [
-  { id: 'sync' as const, label: '同步工作台', to: '/sync', icon: DatabaseZap },
-  { id: 'upstreams' as const, label: '上游连接', to: '/upstreams', icon: Cloud },
-  { id: 'targets' as const, label: '目标实例', to: '/targets', icon: Server },
-  { id: 'drift' as const, label: '漂移修复', to: '/drift', icon: GitCompareArrows },
-  { id: 'tasks' as const, label: '任务记录', to: '/tasks', icon: ListChecks },
-  { id: 'settings' as const, label: '系统设置', to: '/settings', icon: Settings },
+const navGroups = [
+  {
+    id: 'workspace',
+    label: '工作台',
+    items: [
+      { id: 'sync' as const, label: '同步工作台', to: '/sync', icon: DatabaseZap },
+    ],
+  },
+  {
+    id: 'resources',
+    label: '资源',
+    items: [
+      { id: 'upstreams' as const, label: '上游连接', to: '/upstreams', icon: Cloud },
+      { id: 'targets' as const, label: '目标实例', to: '/targets', icon: Server },
+    ],
+  },
+  {
+    id: 'operations',
+    label: '运维',
+    items: [
+      { id: 'drift' as const, label: '漂移修复', to: '/drift', icon: GitCompareArrows },
+      { id: 'tasks' as const, label: '任务记录', to: '/tasks', icon: ListChecks },
+    ],
+  },
+  {
+    id: 'system',
+    label: '系统',
+    items: [
+      { id: 'settings' as const, label: '系统设置', to: '/settings', icon: Settings },
+    ],
+  },
 ]
 
 const activeNavigationId = computed(() => route.meta.navigationId as NavigationId | undefined)
@@ -252,20 +276,30 @@ onUnmounted(() => {
     </header>
 
     <aside class="desktop-sidebar" aria-label="控制台导航">
-      <p class="nav-section-label">工作区</p>
       <nav class="side-nav" aria-label="主导航">
-        <RouterLink
-          v-for="item in navItems"
-          :key="item.id"
-          :to="item.to"
-          :class="{ active: activeNavigationId === item.id }"
-          :aria-current="activeNavigationId === item.id ? 'page' : undefined"
-          :title="sidebarCollapsed ? item.label : undefined"
+        <div
+          v-for="group in navGroups"
+          :key="group.id"
+          class="nav-group"
+          role="group"
+          :aria-label="group.label"
         >
-          <component :is="item.icon" :size="18" aria-hidden="true" />
-          <span>{{ item.label }}</span>
-          <span v-if="item.id === 'drift' && driftCount" class="nav-count" aria-hidden="true">{{ driftCount }}</span>
-        </RouterLink>
+          <p class="nav-section-label">{{ group.label }}</p>
+          <div class="nav-group-items">
+            <RouterLink
+              v-for="item in group.items"
+              :key="item.id"
+              :to="item.to"
+              :class="{ active: activeNavigationId === item.id }"
+              :aria-current="activeNavigationId === item.id ? 'page' : undefined"
+              :title="sidebarCollapsed ? item.label : undefined"
+            >
+              <component :is="item.icon" :size="18" aria-hidden="true" />
+              <span>{{ item.label }}</span>
+              <span v-if="item.id === 'drift' && driftCount" class="nav-count" aria-hidden="true">{{ driftCount }}</span>
+            </RouterLink>
+          </div>
+        </div>
       </nav>
       <footer class="sidebar-meta" aria-label="构建信息">
         <div class="sidebar-api-state">
@@ -314,19 +348,29 @@ onUnmounted(() => {
           </button>
         </header>
         <nav class="mobile-nav" aria-label="移动端主导航" data-open="true">
-          <p class="nav-section-label">工作区</p>
-          <RouterLink
-            v-for="item in navItems"
-            :key="item.id"
-            :to="item.to"
-            :class="{ active: activeNavigationId === item.id }"
-            :aria-current="activeNavigationId === item.id ? 'page' : undefined"
-            @click="closeMobileNavAfterNavigation"
+          <div
+            v-for="group in navGroups"
+            :key="group.id"
+            class="nav-group"
+            role="group"
+            :aria-label="group.label"
           >
-            <component :is="item.icon" :size="18" aria-hidden="true" />
-            <span>{{ item.label }}</span>
-            <span v-if="item.id === 'drift' && driftCount" class="nav-count" aria-hidden="true">{{ driftCount }}</span>
-          </RouterLink>
+            <p class="nav-section-label">{{ group.label }}</p>
+            <div class="nav-group-items">
+              <RouterLink
+                v-for="item in group.items"
+                :key="item.id"
+                :to="item.to"
+                :class="{ active: activeNavigationId === item.id }"
+                :aria-current="activeNavigationId === item.id ? 'page' : undefined"
+                @click="closeMobileNavAfterNavigation"
+              >
+                <component :is="item.icon" :size="18" aria-hidden="true" />
+                <span>{{ item.label }}</span>
+                <span v-if="item.id === 'drift' && driftCount" class="nav-count" aria-hidden="true">{{ driftCount }}</span>
+              </RouterLink>
+            </div>
+          </div>
         </nav>
         <footer class="sidebar-meta" aria-label="构建信息">
           <div class="sidebar-api-state">
