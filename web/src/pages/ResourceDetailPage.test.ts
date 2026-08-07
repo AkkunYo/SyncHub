@@ -597,6 +597,17 @@ describe('Connection resource details', () => {
 })
 
 describe('resource detail responsive model management layout', () => {
+  it.each([320, 390])('keeps Key model action labels readable at %ipx', (viewportWidth) => {
+    const mobileRules = blockFor(resourceDetailSource, '@media (max-width: 720px)')
+    const actionButtons = declarationsFor(mobileRules, '.key-action-button')
+    const actionLabels = declarationsFor(mobileRules, '.key-action-label')
+
+    expect(viewportWidth).toBeLessThanOrEqual(720)
+    expect(actionButtons).toContain('flex: 0 0 auto;')
+    expect(actionButtons).toContain('white-space: nowrap;')
+    expect(actionLabels).toContain('display: inline;')
+  })
+
   it.each([320, 390])('keeps model discovery controls inside a %ipx modal', (viewportWidth) => {
     const mobileRules = blockFor(resourceDetailSource, '@media (max-width: 720px)')
     const commandBar = declarationsFor(mobileRules, '.models-command-bar')
