@@ -4,6 +4,7 @@ import { RouterLink } from 'vue-router'
 import {
   CheckCircle2,
   Circle,
+  PackageSearch,
   RefreshCw,
   RotateCcw,
   Search,
@@ -481,54 +482,59 @@ function matrixStatusLabel(status: string): string {
     >
       <div class="workspace-toolbar">
         <div class="page-actions matrix-page-actions">
-          <div class="toolbar-filters">
-            <label class="compact-field">
-              <span>上游实例</span>
-              <select :value="store.selectedUpstreamId" @change="onUpstreamChange">
-                <option v-for="source in store.upstreams" :key="source.id" :value="source.id">
-                  {{ source.name }}
-                </option>
-              </select>
-            </label>
+          <label class="search-field matrix-search-field">
+            <Search :size="16" aria-hidden="true" />
+            <span class="sr-only">搜索资产</span>
+            <input
+              v-model="assetQuery"
+              type="search"
+              aria-label="搜索资产"
+              placeholder="搜索资产名称、供应商或模型"
+              autocomplete="off"
+            />
+          </label>
 
-            <label class="search-field">
-              <Search :size="16" aria-hidden="true" />
-              <span class="sr-only">搜索资产</span>
-              <input
-                v-model="assetQuery"
-                type="search"
-                aria-label="搜索资产"
-                placeholder="搜索资产"
-                autocomplete="off"
-              />
-            </label>
+          <label class="compact-field matrix-upstream-field">
+            <span class="sr-only">上游实例</span>
+            <select
+              :value="store.selectedUpstreamId"
+              aria-label="上游实例"
+              @change="onUpstreamChange"
+            >
+              <option v-for="source in store.upstreams" :key="source.id" :value="source.id">
+                {{ source.name }}
+              </option>
+            </select>
+          </label>
 
-            <label class="filter-field">
-              <span class="sr-only">同步状态</span>
-              <select v-model="statusFilter" aria-label="同步状态">
-                <option value="all">全部状态</option>
-                <option value="unsynced">未同步</option>
-                <option value="synced">已同步</option>
-                <option value="drifted">有漂移</option>
-                <option value="incompatible">不兼容</option>
-                <option value="needs_reconcile">待校验</option>
-              </select>
-            </label>
-          </div>
+          <label class="filter-field matrix-status-field">
+            <span class="sr-only">同步状态</span>
+            <select v-model="statusFilter" aria-label="同步状态">
+              <option value="all">全部状态</option>
+              <option value="unsynced">未同步</option>
+              <option value="synced">已同步</option>
+              <option value="drifted">有漂移</option>
+              <option value="incompatible">不兼容</option>
+              <option value="needs_reconcile">待校验</option>
+            </select>
+          </label>
 
           <button
-            class="secondary-button"
+            v-if="rows.length > 0"
+            class="secondary-button matrix-refresh-button"
             type="button"
+            aria-label="刷新资产"
+            title="刷新资产"
             :disabled="!store.selectedUpstreamId || store.matrixState === 'loading'"
             @click="store.refreshAssets"
           >
             <RefreshCw :size="16" aria-hidden="true" />
-            刷新资产
+            <span class="matrix-refresh-label">刷新资产</span>
           </button>
         </div>
       </div>
 
-      <div v-if="activeMatrix" class="metric-strip" aria-label="矩阵摘要">
+      <div v-if="activeMatrix && rows.length > 0" class="metric-strip" aria-label="矩阵摘要">
         <div><strong>{{ rows.length }}</strong><span>资产</span></div>
         <div><strong>{{ syncedCount }}</strong><span>已同步</span></div>
         <div :class="{ 'metric-alert': driftCount > 0 }"><strong>{{ driftCount }}</strong><span>漂移</span></div>
@@ -586,10 +592,13 @@ function matrixStatusLabel(status: string): string {
         </div>
       </div>
 
-      <div v-else-if="rows.length === 0" class="state-panel">
+      <div v-else-if="rows.length === 0" class="state-panel matrix-empty-state">
+        <span class="matrix-empty-icon" aria-hidden="true">
+          <PackageSearch :size="20" />
+        </span>
         <h2>暂无上游资产</h2>
-        <p>最近一次完整快照为空。</p>
-        <button class="secondary-button" type="button" @click="store.refreshAssets">
+        <p>当前上游还没有可同步的资产，刷新后会在这里显示。</p>
+        <button class="secondary-button matrix-empty-action" type="button" @click="store.refreshAssets">
           <RefreshCw :size="16" aria-hidden="true" />
           刷新资产
         </button>
@@ -854,6 +863,7 @@ function matrixStatusLabel(status: string): string {
 
 .sync-workspace {
   display: flex;
+  min-width: 0;
   min-height: 420px;
   flex: 1 1 auto;
   flex-direction: column;
@@ -862,6 +872,7 @@ function matrixStatusLabel(status: string): string {
 
 .sync-page {
   display: flex;
+  min-width: 0;
   min-height: calc(100svh - var(--app-header-height) - 48px);
   flex-direction: column;
 }
@@ -876,12 +887,81 @@ function matrixStatusLabel(status: string): string {
   background: var(--surface);
 }
 
+.matrix-page-actions {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  grid-template-columns: minmax(220px, 1fr) minmax(0, 220px) minmax(0, 160px) auto;
+}
+
+.matrix-page-actions > * {
+  min-width: 0;
+}
+
+.matrix-page-actions input,
+.matrix-page-actions select,
+.matrix-page-actions button {
+  min-width: 0;
+  min-height: 44px;
+}
+
+.matrix-search-field,
+.matrix-upstream-field,
+.matrix-status-field {
+  width: 100%;
+  min-width: 0;
+}
+
+.matrix-refresh-button {
+  white-space: nowrap;
+}
+
 .sync-workspace :deep(.metric-strip > div) {
   min-height: 52px;
 }
 
 .sync-workspace :deep(.metric-strip strong) {
   font-size: 17px;
+}
+
+.matrix-empty-state {
+  min-height: 260px;
+  gap: 8px;
+  padding: 40px 20px;
+}
+
+.matrix-empty-icon {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  margin-bottom: 4px;
+  place-items: center;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  color: var(--blue);
+  background: var(--blue-soft);
+}
+
+.matrix-empty-state h2,
+.matrix-empty-state p {
+  margin: 0;
+}
+
+.matrix-empty-state h2 {
+  font-size: 15px;
+}
+
+.matrix-empty-state p {
+  max-width: 360px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.matrix-empty-action {
+  min-height: 44px;
+  margin-top: 6px;
 }
 
 .setup-state {
@@ -1209,6 +1289,39 @@ function matrixStatusLabel(status: string): string {
 
   .workspace-page-header {
     display: block;
+  }
+
+  .sync-workspace :deep(.workspace-toolbar) {
+    padding: 10px;
+  }
+
+  .matrix-page-actions {
+    align-items: center;
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) 44px;
+  }
+
+  .matrix-search-field {
+    min-width: 0;
+    grid-column: 1 / -1;
+  }
+
+  .matrix-upstream-field {
+    min-width: 0;
+  }
+
+  .matrix-status-field {
+    min-width: 0;
+  }
+
+  .matrix-refresh-button {
+    width: 44px;
+    min-height: 44px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .matrix-refresh-label {
+    display: none;
   }
 
   .setup-state {
