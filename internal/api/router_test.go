@@ -73,6 +73,7 @@ type fakeTarget struct {
 	updated     platform.UpdateChannelInput
 	deletedID   string
 	listFn      func(context.Context) ([]platform.Channel, error)
+	updateFn    func(context.Context, string, platform.UpdateChannelInput) (platform.Channel, error)
 }
 
 func (t *fakeTarget) ListChannels(ctx context.Context) ([]platform.Channel, error) {
@@ -90,10 +91,13 @@ func (t *fakeTarget) CreateChannel(context.Context, platform.CreateChannelInput)
 	return platform.Channel{}, errors.New("unexpected direct create")
 }
 
-func (t *fakeTarget) UpdateChannel(_ context.Context, id string, input platform.UpdateChannelInput) (platform.Channel, error) {
+func (t *fakeTarget) UpdateChannel(ctx context.Context, id string, input platform.UpdateChannelInput) (platform.Channel, error) {
 	t.updateCalls++
 	t.updatedID = id
 	t.updated = input
+	if t.updateFn != nil {
+		return t.updateFn(ctx, id, input)
+	}
 	if t.updateErr != nil {
 		return platform.Channel{}, t.updateErr
 	}
@@ -1156,6 +1160,218 @@ func TestAcceptDriftRejectsMissingLiveChannelAndClientSnapshot(t *testing.T) {
 	if recorder.Code != http.StatusBadRequest || errorCode(t, envelope) != "invalid_request" {
 		t.Fatalf("client snapshot status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
+}
+
+func TestRestoreDriftRestoresDesiredStateAndVerifiesTarget(t *testing.T) {
+	env := newTestEnvironment()
+	mapping := platform.SyncMapping{
+		UpstreamAssetID: "source-a:channel:7:key:0",
+		TargetID:        "target-a",
+		TargetChannelID: "42",
+		Snapshot: platform.ChannelSnapshot{
+			Models: []string{"gpt-4.1", "gpt-4.1-mini"},
+			Group:  "desired", Priority: 3, Weight: 120,
+		},
+	}
+	env.mappings.byTarget["target-a"] = []platform.SyncMapping{mapping}
+	target := env.resolver.targets["target-a"].adapter.(*fakeTarget)
+	current := platform.Channel{
+		ID: "42", Name: "operator name", BaseURL: "https://runtime.example.com/v1",
+		Models: []string{"wrong"}, Group: "manual", Priority: 9, Weight: 20, Enabled: false,
+	}
+	updated := platform.Channel{
+		ID: "42", Name: current.Name, BaseURL: current.BaseURL,
+		Models: []string{"gpt-4.1", "gpt-4.1-mini"}, Group: "desired", Priority: 3, Weight: 120, Enabled: false,
+	}
+	target.channels = []platform.Channel{current}
+	target.updateFn = func(_ context.Context, id string, input platform.UpdateChannelInput) (platform.Channel, error) {
+		if id != "42" {
+			t.Fatalf("UpdateChannel id=%q", id)
+		}
+		target.channels = []platform.Channel{updated}
+		return updated, nil
+	}
+	env.reconciler.checkFn = func(ctx context.Context, targetID string, checked platform.TargetAdapter) (reconcile.Report, error) {
+		channels, err := checked.ListChannels(ctx)
+		if err != nil {
+			t.Fatalf("verification ListChannels() error = %v", err)
+		}
+		if targetID != "target-a" || len(channels) != 1 || channels[0].Weight != 120 || channels[0].Group != "desired" {
+			t.Fatalf("verification target=%q channels=%#v", targetID, channels)
+		}
+		return reconcile.Report{TargetID: targetID, Mappings: []reconcile.MappingState{{
+			Mapping: mapping,
+			Status:  reconcile.StatusSynced,
+		}}}, nil
+	}
+	runtimeState := NewRuntime()
+	router, err := NewRouterWithRuntime(env.dependencies(), runtimeState)
+	if err != nil {
+		t.Fatalf("NewRouterWithRuntime() error = %v", err)
+	}
+
+	body := `{"upstream_asset_id":"source-a:channel:7:key:0","channel_id":"42"}`
+	recorder, envelope := request(t, router, http.MethodPost, "/api/v1/targets/target-a/drift/restore", body, "application/json")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("restore status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if target.listCalls != 2 || target.updateCalls != 1 || env.reconciler.checkCalls != 1 || env.reconciler.checkedID != "target-a" {
+		t.Fatalf("list=%d update=%d check=%d checked=%q", target.listCalls, target.updateCalls, env.reconciler.checkCalls, env.reconciler.checkedID)
+	}
+	if target.updated.Name != current.Name || target.updated.BaseURL != current.BaseURL || target.updated.Enabled != current.Enabled ||
+		strings.Join(target.updated.Models, ",") != "gpt-4.1,gpt-4.1-mini" || target.updated.Group != "desired" ||
+		target.updated.Priority != 3 || target.updated.Weight != 120 {
+		t.Fatalf("UpdateChannel input=%#v", target.updated)
+	}
+	stored := env.mappings.byTarget["target-a"][0]
+	if env.mappings.updateCalls != 0 || strings.Join(stored.Snapshot.Models, ",") != "gpt-4.1,gpt-4.1-mini" ||
+		stored.Snapshot.Group != "desired" || stored.Snapshot.Priority != 3 || stored.Snapshot.Weight != 120 {
+		t.Fatalf("mapping was mutated: updates=%d mapping=%#v", env.mappings.updateCalls, stored)
+	}
+	data := dataObject(t, envelope)
+	responseMapping := data["mapping"].(map[string]any)
+	responseSnapshot := responseMapping["snapshot"].(map[string]any)
+	responseChannel := data["channel"].(map[string]any)
+	responseReport := data["report"].(map[string]any)
+	if responseSnapshot["weight"] != float64(120) || responseChannel["name"] != current.Name ||
+		responseChannel["base_url"] != current.BaseURL || responseChannel["enabled"] != false || responseReport["target_id"] != "target-a" {
+		t.Fatalf("restore response=%#v", data)
+	}
+	if strings.Contains(recorder.Body.String(), testSecret) {
+		t.Fatalf("restore response leaked a credential: %s", recorder.Body.String())
+	}
+	if pending, needsReconcile, differences := runtimeState.matrixState(runtimeKey{assetID: mapping.UpstreamAssetID, targetID: mapping.TargetID}); needsReconcile || pending.channelID != "" || len(differences) != 0 {
+		t.Fatalf("successful restore runtime pending=%#v needs=%v differences=%#v", pending, needsReconcile, differences)
+	}
+}
+
+func TestRestoreDriftUsesStrictValidationAndStableNotFoundErrors(t *testing.T) {
+	tests := []struct {
+		name  string
+		path  string
+		body  string
+		setup func(*testEnvironment)
+		code  string
+		want  int
+	}{
+		{
+			name: "unknown field", path: "/api/v1/targets/target-a/drift/restore",
+			body: `{"upstream_asset_id":"asset-a","channel_id":"42","models":["client-value"]}`,
+			code: "invalid_request", want: http.StatusBadRequest,
+		},
+		{
+			name: "target", path: "/api/v1/targets/missing/drift/restore",
+			body: `{"upstream_asset_id":"asset-a","channel_id":"42"}`,
+			code: "target_not_found", want: http.StatusNotFound,
+		},
+		{
+			name: "exact mapping", path: "/api/v1/targets/target-a/drift/restore",
+			body: `{"upstream_asset_id":"asset-a","channel_id":"42"}`,
+			setup: func(env *testEnvironment) {
+				env.mappings.byTarget["target-a"] = []platform.SyncMapping{{
+					UpstreamAssetID: "asset-a", TargetID: "target-b", TargetChannelID: "42",
+				}}
+			},
+			code: "channel_not_found", want: http.StatusNotFound,
+		},
+		{
+			name: "live channel", path: "/api/v1/targets/target-a/drift/restore",
+			body: `{"upstream_asset_id":"asset-a","channel_id":"42"}`,
+			setup: func(env *testEnvironment) {
+				env.mappings.byTarget["target-a"] = []platform.SyncMapping{{
+					UpstreamAssetID: "asset-a", TargetID: "target-a", TargetChannelID: "42",
+				}}
+			},
+			code: "channel_not_found", want: http.StatusNotFound,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			env := newTestEnvironment()
+			if test.setup != nil {
+				test.setup(env)
+			}
+			recorder, envelope := request(t, env.router(t), http.MethodPost, test.path, test.body, "application/json")
+			if recorder.Code != test.want || errorCode(t, envelope) != test.code {
+				t.Fatalf("status=%d code=%q body=%s", recorder.Code, errorCode(t, envelope), recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestRestoreDriftVerificationConflictsPreserveRuntimeEvidence(t *testing.T) {
+	mapping := platform.SyncMapping{
+		UpstreamAssetID: "source-a:channel:7:key:0", TargetID: "target-a", TargetChannelID: "42",
+		Snapshot: platform.ChannelSnapshot{Models: []string{"gpt-4.1"}, Group: "default", Priority: 0, Weight: 100},
+	}
+	current := platform.Channel{
+		ID: "42", Name: "live", BaseURL: "https://runtime.example.com", Models: []string{"gpt-4.1"},
+		Group: "default", Priority: 0, Weight: 80, Enabled: true,
+	}
+	updated := current
+	updated.Weight = 100
+	key := runtimeKey{assetID: mapping.UpstreamAssetID, targetID: mapping.TargetID}
+	body := `{"upstream_asset_id":"source-a:channel:7:key:0","channel_id":"42"}`
+
+	t.Run("check error", func(t *testing.T) {
+		env := newTestEnvironment()
+		env.mappings.byTarget["target-a"] = []platform.SyncMapping{mapping}
+		target := env.resolver.targets["target-a"].adapter.(*fakeTarget)
+		target.channels = []platform.Channel{current}
+		target.updateOut = updated
+		env.reconciler.checkErr = errors.New("verification failed " + testSecret)
+		runtimeState := NewRuntime()
+		runtimeState.recordReconcileReport(reconcile.Report{TargetID: "target-a", Mappings: []reconcile.MappingState{{
+			Mapping: mapping, Status: reconcile.StatusDrifted,
+			Drift: map[string]reconcile.FieldDrift{"weight": {Expected: 100, Actual: 80}},
+		}}}, []platform.Channel{current}, true)
+		router, err := NewRouterWithRuntime(env.dependencies(), runtimeState)
+		if err != nil {
+			t.Fatalf("NewRouterWithRuntime() error = %v", err)
+		}
+
+		recorder, envelope := request(t, router, http.MethodPost, "/api/v1/targets/target-a/drift/restore", body, "application/json")
+		if recorder.Code != http.StatusConflict || errorCode(t, envelope) != "needs_reconcile" || strings.Contains(recorder.Body.String(), testSecret) {
+			t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+		pending, needsReconcile, differences := runtimeState.matrixState(key)
+		if !needsReconcile || pending.channelID != "42" || len(differences) != 1 || differences[0].Field != "weight" {
+			t.Fatalf("runtime pending=%#v needs=%v differences=%#v", pending, needsReconcile, differences)
+		}
+		if target.updateCalls != 1 || env.reconciler.checkCalls != 1 || env.mappings.updateCalls != 0 {
+			t.Fatalf("update=%d check=%d mapping updates=%d", target.updateCalls, env.reconciler.checkCalls, env.mappings.updateCalls)
+		}
+	})
+
+	t.Run("selected mapping remains drifted", func(t *testing.T) {
+		env := newTestEnvironment()
+		env.mappings.byTarget["target-a"] = []platform.SyncMapping{mapping}
+		target := env.resolver.targets["target-a"].adapter.(*fakeTarget)
+		target.channels = []platform.Channel{current}
+		target.updateOut = updated
+		env.reconciler.report = reconcile.Report{TargetID: "target-a", Mappings: []reconcile.MappingState{{
+			Mapping: mapping, Status: reconcile.StatusDrifted,
+			Drift: map[string]reconcile.FieldDrift{"weight": {Expected: 100, Actual: 90}},
+		}}}
+		runtimeState := NewRuntime()
+		router, err := NewRouterWithRuntime(env.dependencies(), runtimeState)
+		if err != nil {
+			t.Fatalf("NewRouterWithRuntime() error = %v", err)
+		}
+
+		recorder, envelope := request(t, router, http.MethodPost, "/api/v1/targets/target-a/drift/restore", body, "application/json")
+		if recorder.Code != http.StatusConflict || errorCode(t, envelope) != "needs_reconcile" {
+			t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+		pending, needsReconcile, differences := runtimeState.matrixState(key)
+		if needsReconcile || pending.channelID != "" || len(differences) != 1 || differences[0].Field != "weight" ||
+			differences[0].Expected != 100 || differences[0].Actual != 90 {
+			t.Fatalf("runtime pending=%#v needs=%v differences=%#v", pending, needsReconcile, differences)
+		}
+		if target.updateCalls != 1 || env.reconciler.checkCalls != 1 || env.mappings.updateCalls != 0 {
+			t.Fatalf("update=%d check=%d mapping updates=%d", target.updateCalls, env.reconciler.checkCalls, env.mappings.updateCalls)
+		}
+	})
 }
 
 func TestNotFoundBodylessAndFallbackRoutesUseEnvelope(t *testing.T) {
