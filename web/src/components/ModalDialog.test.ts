@@ -51,4 +51,39 @@ describe('ModalDialog', () => {
     expect(trigger).toHaveFocus()
     trigger.remove()
   })
+
+  it('keeps background scrolling locked until the last nested dialog closes', () => {
+    const html = document.documentElement
+    const previousHtmlOverflow = html.style.overflow
+    const previousBodyOverflow = document.body.style.overflow
+    html.style.overflow = 'clip'
+    document.body.style.overflow = 'scroll'
+
+    let outer: ReturnType<typeof render> | undefined
+    let inner: ReturnType<typeof render> | undefined
+    try {
+      outer = render(ModalDialog, { props: { title: '外层对话框' } })
+      expect(html.style.overflow).toBe('hidden')
+      expect(document.body.style.overflow).toBe('hidden')
+
+      inner = render(ModalDialog, { props: { title: '内层对话框' } })
+      expect(html.style.overflow).toBe('hidden')
+      expect(document.body.style.overflow).toBe('hidden')
+
+      inner.unmount()
+      inner = undefined
+      expect(html.style.overflow).toBe('hidden')
+      expect(document.body.style.overflow).toBe('hidden')
+
+      outer.unmount()
+      outer = undefined
+      expect(html.style.overflow).toBe('clip')
+      expect(document.body.style.overflow).toBe('scroll')
+    } finally {
+      inner?.unmount()
+      outer?.unmount()
+      html.style.overflow = previousHtmlOverflow
+      document.body.style.overflow = previousBodyOverflow
+    }
+  })
 })

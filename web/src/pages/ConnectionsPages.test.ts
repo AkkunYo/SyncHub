@@ -1,3 +1,8 @@
+/// <reference types="node" />
+
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
 import { createPinia } from 'pinia'
 import { cleanup, render, screen, waitFor, within } from '@testing-library/vue'
 import userEvent from '@testing-library/user-event'
@@ -9,6 +14,27 @@ import type { SanitizedConfig } from '@/types'
 
 import TargetsPage from './TargetsPage.vue'
 import UpstreamsPage from './UpstreamsPage.vue'
+
+const upstreamsPageSource = readFileSync(resolve(process.cwd(), 'src/pages/UpstreamsPage.vue'), 'utf8')
+
+function blockFor(source: string, selector: string): string {
+  const selectorStart = source.indexOf(selector)
+  if (selectorStart === -1) return ''
+  const blockStart = source.indexOf('{', selectorStart + selector.length)
+  if (blockStart === -1) return ''
+
+  let depth = 1
+  for (let index = blockStart + 1; index < source.length; index += 1) {
+    if (source[index] === '{') depth += 1
+    if (source[index] === '}') depth -= 1
+    if (depth === 0) return source.slice(blockStart + 1, index)
+  }
+  return ''
+}
+
+function declarationsFor(source: string, selector: string): string {
+  return blockFor(source, selector).replace(/\s+/g, ' ').trim()
+}
 
 const config = {
   app: {
@@ -231,15 +257,35 @@ describe('Upstream connections workspace', () => {
 
   it('presents compact searchable rows with honest per-key summaries', async () => {
     const user = userEvent.setup()
-    const { router } = await renderPage(UpstreamsPage, '/upstreams')
+    const summaryConfig = structuredClone(config)
+    summaryConfig.upstreams.push({
+      id: 'source-empty',
+      name: '尚未配置 Key 的通用源',
+      type: 'generic',
+      base_url: 'https://empty.example.com/v1',
+      keys: [],
+      sync_mappings: [],
+    })
+    const { router } = await renderPage(UpstreamsPage, '/upstreams', summaryConfig)
 
     expect(screen.getByRole('heading', { name: '上游连接' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '添加上游连接' })).toBeInTheDocument()
+    const newAPIRow = screen.getByRole('row', { name: /New API 用户源/ })
+    expect(within(newAPIRow).getByRole('link', { name: '进入详情查看' })).toBeInTheDocument()
+    expect(within(newAPIRow).queryByText('待发现')).not.toBeInTheDocument()
+
+    const emptyKeyRow = screen.getByRole('row', { name: /尚未配置 Key 的通用源/ })
+    expect(within(emptyKeyRow).getByText('0 Key')).toBeInTheDocument()
+    expect(within(emptyKeyRow).getByText('0 个模型')).toBeInTheDocument()
+
     const genericRow = screen.getByRole('row', { name: /通用生产源/ })
     expect(within(genericRow).getByText('1 / 2 启用')).toBeInTheDocument()
     expect(within(genericRow).getByText('3 个模型')).toBeInTheDocument()
     expect(within(genericRow).getByText('未验证')).toBeInTheDocument()
     expect(within(genericRow).queryByText('健康')).not.toBeInTheDocument()
+    expect(within(genericRow).getByText('验证', { selector: '.action-label' })).toBeInTheDocument()
+    expect(within(genericRow).getByText('编辑', { selector: '.action-label' })).toBeInTheDocument()
+    expect(within(genericRow).getByText('详情', { selector: '.action-label' })).toBeInTheDocument()
 
     await user.selectOptions(screen.getByLabelText('接入预设'), 'generic')
     expect(screen.queryByText('New API 用户源')).not.toBeInTheDocument()
@@ -249,6 +295,33 @@ describe('Upstream connections workspace', () => {
     await user.clear(screen.getByRole('searchbox', { name: '搜索上游连接' }))
     await user.type(screen.getByRole('searchbox', { name: '搜索上游连接' }), '没有结果')
     expect(screen.getByText('没有匹配的上游连接')).toBeInTheDocument()
+  })
+
+  it.each([320, 390])('keeps upstream rows and controls scannable at %ipx', (viewportWidth) => {
+    const breakpoint = 720
+    const mobileRules = blockFor(upstreamsPageSource, `@media (max-width: ${breakpoint}px)`)
+    const controls = declarationsFor(mobileRules, '.search-control input,')
+    const cells = declarationsFor(mobileRules, '.connection-table td')
+    const longValues = declarationsFor(mobileRules, '.primary-cell code,')
+    const actions = declarationsFor(mobileRules, '.row-actions .icon-button')
+    const actionLabels = declarationsFor(mobileRules, '.action-label')
+    const surface = declarationsFor(upstreamsPageSource, '.connection-surface')
+    const tableWrap = declarationsFor(upstreamsPageSource, '.table-wrap')
+
+    expect(viewportWidth).toBeLessThanOrEqual(breakpoint)
+    expect(controls).toContain('min-height: 44px;')
+    expect(cells).toContain('grid-template-columns: 68px minmax(0, 1fr);')
+    expect(mobileRules).toContain('.connection-table td::before')
+    expect(upstreamsPageSource).toContain('data-label="端点"')
+    expect(upstreamsPageSource).toContain('data-label="Key / 模型"')
+    expect(upstreamsPageSource).toContain('data-label="验证"')
+    expect(longValues).toContain('overflow-wrap: anywhere;')
+    expect(longValues).toContain('white-space: normal;')
+    expect(actions).toContain('min-height: 44px;')
+    expect(actionLabels).toContain('display: inline;')
+    expect(surface).toContain('min-height: 0;')
+    expect(surface).toContain('flex: none;')
+    expect(tableWrap).toContain('flex: none;')
   })
 
   it('creates a generic connection with multiple write-only keys in a side drawer', async () => {
