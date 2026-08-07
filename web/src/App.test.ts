@@ -200,6 +200,35 @@ describe('SyncHub console', () => {
     expect(within(navigation).getByRole('link', { name: '漂移修复' })).toHaveAttribute('aria-current', 'page')
   })
 
+  it('organizes desktop and mobile navigation into clear operations groups', async () => {
+    installConsoleApi()
+    const user = userEvent.setup()
+
+    renderApp()
+
+    const desktopNavigation = await screen.findByRole('navigation', { name: '主导航' })
+    const expectedGroups = [
+      { name: '工作台', links: ['同步工作台'] },
+      { name: '资源', links: ['上游连接', '目标实例'] },
+      { name: '运维', links: ['漂移修复', '任务记录'] },
+      { name: '系统', links: ['系统设置'] },
+    ] as const
+
+    for (const expectedGroup of expectedGroups) {
+      const group = within(desktopNavigation).getByRole('group', { name: expectedGroup.name })
+      expect(within(group).getAllByRole('link').map((link) => link.textContent?.trim()))
+        .toEqual(expectedGroup.links)
+    }
+
+    await user.click(screen.getByRole('button', { name: '打开导航' }))
+    const mobileNavigation = screen.getByRole('navigation', { name: '移动端主导航' })
+    for (const expectedGroup of expectedGroups) {
+      const group = within(mobileNavigation).getByRole('group', { name: expectedGroup.name })
+      expect(within(group).getAllByRole('link').map((link) => link.textContent?.trim()))
+        .toEqual(expectedGroup.links)
+    }
+  })
+
   it('collapses the desktop navigation and restores the saved workspace preference', async () => {
     installConsoleApi()
     const user = userEvent.setup()

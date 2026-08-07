@@ -53,4 +53,31 @@ describe('console accessibility styles', () => {
       .map((match) => match[1]?.trim())
     expect(new Set(letterSpacingValues)).toEqual(new Set(['0']))
   })
+
+  it('uses the New API inspired font and semantic shell palette', () => {
+    expect(ruleBody(':root')).toContain("'Public Sans'")
+
+    for (const token of [
+      '--background:',
+      '--foreground:',
+      '--card:',
+      '--card-foreground:',
+      '--primary:',
+      '--primary-foreground:',
+      '--border:',
+      '--sidebar-foreground:',
+      '--sidebar-accent:',
+      '--sidebar-accent-foreground:',
+      '--sidebar-border:',
+    ]) {
+      expect(styles).toContain(token)
+    }
+
+    const activeNavigation = styles.match(
+      /\.side-nav a\.active,\s*\.mobile-nav a\.active\s*\{([^}]*)\}/s,
+    )?.[1] ?? ''
+    expect(activeNavigation).toContain('color: var(--sidebar-accent-foreground);')
+    expect(activeNavigation).toContain('background: var(--sidebar-accent);')
+    expect(activeNavigation).toContain('box-shadow: inset 2px 0 var(--sidebar-primary);')
+  })
 })
