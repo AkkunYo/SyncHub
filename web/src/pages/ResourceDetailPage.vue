@@ -1017,8 +1017,8 @@ function capabilityLabel(value: string): string {
           </div>
           <div v-if="targetProviderModes.length">
             <span>模式</span>
-            <strong class="capability-modes">
-              <code v-for="mode in targetProviderModes" :key="mode">{{ mode }}</code>
+            <strong class="capability-modes" role="list" aria-label="目标支持模式">
+              <code v-for="mode in targetProviderModes" :key="mode" role="listitem">{{ mode }}</code>
             </strong>
           </div>
           <div v-for="([capability, value]) in simpleTargetCapabilities" :key="capability">
@@ -1715,6 +1715,24 @@ function capabilityLabel(value: string): string {
 
 .capability-grid span { color: var(--muted); font-size: 10px; }
 .capability-grid strong { color: var(--ink); font-size: 12px; }
+
+.capability-modes {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.capability-modes code {
+  display: inline-flex;
+  max-width: 100%;
+  padding: 2px 5px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface-subtle);
+  overflow-wrap: anywhere;
+}
+
 .overview-entry { border-bottom: 0; }
 
 .inline-error {
@@ -2117,6 +2135,7 @@ function capabilityLabel(value: string): string {
   .overview-status > button,
   .overview-entry > a { margin-left: 52px; }
   .capability-grid { grid-template-columns: 1fr 1fr; }
+  .capability-grid > div:last-child:nth-child(odd) { grid-column: 1 / -1; }
   .settings-list > div { grid-template-columns: 100px minmax(0, 1fr); }
 
   .models-command-bar {
