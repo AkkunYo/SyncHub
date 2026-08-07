@@ -31,6 +31,7 @@ const deleteChannel = ref<Channel | null>(null)
 const actionError = ref('')
 const saving = ref(false)
 const deleting = ref(false)
+const nativeMutationConfirmed = ref(false)
 function queryValue(key: string): string {
   const value = route?.query[key]
   return Array.isArray(value) ? value[0] ?? '' : value ?? ''
@@ -161,6 +162,7 @@ watch([pageCount, currentPage], ([count, page]) => {
 })
 
 function openEdit(channel: Channel): void {
+  nativeMutationConfirmed.value = false
   editChannel.value = channel
   form.name = channel.name
   form.base_url = channel.base_url
@@ -176,11 +178,19 @@ function openEdit(channel: Channel): void {
 function closeEdit(): void {
   if (saving.value) return
   editChannel.value = null
+  nativeMutationConfirmed.value = false
+}
+
+function openDelete(channel: Channel): void {
+  nativeMutationConfirmed.value = false
+  deleteChannel.value = channel
+  actionError.value = ''
 }
 
 function closeDelete(): void {
   if (deleting.value) return
   deleteChannel.value = null
+  nativeMutationConfirmed.value = false
 }
 
 function validOptionalUrl(value: string): boolean {
@@ -194,7 +204,11 @@ function validOptionalUrl(value: string): boolean {
 }
 
 async function saveChannel(): Promise<void> {
-  if (!editChannel.value || saving.value) return
+  if (
+    !editChannel.value
+    || saving.value
+    || (!editChannel.value.managed && !nativeMutationConfirmed.value)
+  ) return
   const targetId = store.selectedTargetId
   const editing = editChannel.value
   if (!form.name.trim()) {
@@ -224,7 +238,10 @@ async function saveChannel(): Promise<void> {
       enabled: form.enabled,
     })
     if (store.selectedTargetId === targetId) store.replaceChannel(channel)
-    if (editChannel.value === editing) editChannel.value = null
+    if (editChannel.value === editing) {
+      editChannel.value = null
+      nativeMutationConfirmed.value = false
+    }
   } catch (error) {
     if (editChannel.value === editing) actionError.value = safeErrorMessage(error)
   } finally {
@@ -233,7 +250,11 @@ async function saveChannel(): Promise<void> {
 }
 
 async function confirmDelete(): Promise<void> {
-  if (!deleteChannel.value || deleting.value) return
+  if (
+    !deleteChannel.value
+    || deleting.value
+    || (!deleteChannel.value.managed && !nativeMutationConfirmed.value)
+  ) return
   const targetId = store.selectedTargetId
   const deleted = deleteChannel.value
   deleting.value = true
@@ -244,7 +265,10 @@ async function confirmDelete(): Promise<void> {
       store.markChannelDeleted(deleted.upstream_asset_id, targetId, deleted.id)
     }
     if (store.selectedTargetId === targetId) store.removeChannel(deleted.id)
-    if (deleteChannel.value === deleted) deleteChannel.value = null
+    if (deleteChannel.value === deleted) {
+      deleteChannel.value = null
+      nativeMutationConfirmed.value = false
+    }
   } catch (error) {
     if (deleteChannel.value === deleted) actionError.value = safeErrorMessage(error)
   } finally {
@@ -415,23 +439,26 @@ async function confirmDelete(): Promise<void> {
                   <td class="actions-cell" data-label="操作">
                     <button
                       class="icon-button icon-button-small"
+                      :class="{ 'danger-icon': !channel.managed }"
                       type="button"
-                      :aria-label="`编辑渠道 ${channel.name}`"
-                      title="编辑渠道"
+                      :aria-label="channel.managed ? `编辑渠道 ${channel.name}` : `危险编辑原生渠道 ${channel.name}`"
+                      :title="channel.managed ? '编辑渠道' : '危险操作：编辑原生渠道'"
                       @click="openEdit(channel)"
                     >
                       <Pencil :size="16" aria-hidden="true" />
-                      <span class="channel-action-label">编辑</span>
+                      <template v-if="channel.managed"><span class="channel-action-label">编辑</span></template>
+                      <template v-else><span class="channel-action-label">危险编辑</span></template>
                     </button>
                     <button
                       class="icon-button icon-button-small danger-icon"
                       type="button"
-                      :aria-label="`删除渠道 ${channel.name}`"
-                      title="删除渠道"
-                      @click="deleteChannel = channel; actionError = ''"
+                      :aria-label="channel.managed ? `删除渠道 ${channel.name}` : `危险删除原生渠道 ${channel.name}`"
+                      :title="channel.managed ? '删除渠道' : '危险操作：删除原生渠道'"
+                      @click="openDelete(channel)"
                     >
                       <Trash2 :size="16" aria-hidden="true" />
-                      <span class="channel-action-label">删除</span>
+                      <template v-if="channel.managed"><span class="channel-action-label">删除</span></template>
+                      <template v-else><span class="channel-action-label">危险删除</span></template>
                     </button>
                   </td>
                 </tr>
@@ -468,8 +495,16 @@ async function confirmDelete(): Promise<void> {
       </section>
     </template>
 
-    <ModalDialog v-if="editChannel" title="编辑目标渠道" close-label="关闭渠道编辑" @close="closeEdit">
+    <ModalDialog
+      v-if="editChannel"
+      :title="editChannel.managed ? '编辑目标渠道' : '危险操作：编辑目标原生渠道'"
+      close-label="关闭渠道编辑"
+      @close="closeEdit"
+    >
       <form class="form-stack" @submit.prevent="saveChannel">
+        <p v-if="!editChannel.managed" class="notice notice-error" role="alert">
+          <strong>危险操作：</strong>此操作会直接写入目标平台，且不会创建 SyncHub 同步映射。
+        </p>
         <div class="form-grid">
           <label class="field field-wide">
             <span>名称</span>
@@ -500,21 +535,51 @@ async function confirmDelete(): Promise<void> {
           <input v-model="form.enabled" type="checkbox" />
           <span>启用渠道</span>
         </label>
+        <label v-if="!editChannel.managed" class="check-row">
+          <input v-model="nativeMutationConfirmed" type="checkbox" />
+          <span>我了解风险，确认直接修改目标平台</span>
+        </label>
         <p v-if="actionError" class="form-error" role="alert">{{ actionError }}</p>
         <footer class="form-actions">
           <button class="secondary-button" type="button" :disabled="saving" @click="closeEdit">取消</button>
-          <button class="primary-button" type="submit" :disabled="saving">{{ saving ? '保存中' : '保存渠道' }}</button>
+          <button
+            class="primary-button"
+            type="submit"
+            :disabled="saving || (!editChannel.managed && !nativeMutationConfirmed)"
+          >
+            {{ saving ? '保存中' : editChannel.managed ? '保存渠道' : '确认直接保存' }}
+          </button>
         </footer>
       </form>
     </ModalDialog>
 
-    <ModalDialog v-if="deleteChannel" title="删除目标渠道" close-label="关闭删除确认" @close="closeDelete">
-      <p>确定删除“{{ deleteChannel.name }}”吗？目标端成功删除后，其同步映射也会移除。</p>
+    <ModalDialog
+      v-if="deleteChannel"
+      :title="deleteChannel.managed ? '删除目标渠道' : '危险操作：删除目标原生渠道'"
+      close-label="关闭删除确认"
+      @close="closeDelete"
+    >
+      <p v-if="!deleteChannel.managed" class="notice notice-error" role="alert">
+        <strong>危险操作：</strong>此操作会直接写入目标平台，且不会创建 SyncHub 同步映射。
+      </p>
+      <p v-if="deleteChannel.managed">
+        确定删除“{{ deleteChannel.name }}”吗？目标端成功删除后，其同步映射也会移除。
+      </p>
+      <p v-else>确定直接删除目标原生渠道“{{ deleteChannel.name }}”吗？</p>
+      <label v-if="!deleteChannel.managed" class="check-row">
+        <input v-model="nativeMutationConfirmed" type="checkbox" />
+        <span>我了解风险，确认直接删除目标平台渠道</span>
+      </label>
       <p v-if="actionError" class="form-error" role="alert">{{ actionError }}</p>
       <footer class="form-actions">
         <button class="secondary-button" type="button" :disabled="deleting" @click="closeDelete">取消</button>
-        <button class="danger-button" type="button" :disabled="deleting" @click="confirmDelete">
-          {{ deleting ? '删除中' : '确认删除' }}
+        <button
+          class="danger-button"
+          type="button"
+          :disabled="deleting || (!deleteChannel.managed && !nativeMutationConfirmed)"
+          @click="confirmDelete"
+        >
+          {{ deleting ? '删除中' : deleteChannel.managed ? '确认删除' : '确认直接删除' }}
         </button>
       </footer>
     </ModalDialog>
