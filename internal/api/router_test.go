@@ -1369,7 +1369,7 @@ func TestRestoreDriftVerificationConflictsPreserveRuntimeEvidence(t *testing.T) 
 			t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 		}
 		pending, needsReconcile, differences := runtimeState.matrixState(key)
-		if needsReconcile || pending.channelID != "" || len(differences) != 1 || differences[0].Field != "weight" ||
+		if !needsReconcile || pending.channelID != "42" || len(differences) != 1 || differences[0].Field != "weight" ||
 			differences[0].Expected != 100 || differences[0].Actual != 90 {
 			t.Fatalf("runtime pending=%#v needs=%v differences=%#v", pending, needsReconcile, differences)
 		}

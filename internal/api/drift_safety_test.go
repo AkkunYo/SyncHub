@@ -65,8 +65,40 @@ func TestAcceptDriftVerifiesLiveStateBeforeClearingDrift(t *testing.T) {
 		t.Fatalf("accept=%d check=%d list=%d", env.reconciler.acceptCalls, env.reconciler.checkCalls, target.listCalls)
 	}
 	pending, needsReconcile, differences := runtimeState.matrixState(runtimeKey{assetID: mapping.UpstreamAssetID, targetID: mapping.TargetID})
-	if needsReconcile || pending.channelID != "" || len(differences) != 1 || differences[0].Field != "weight" ||
+	if !needsReconcile || pending.channelID != "42" || len(differences) != 1 || differences[0].Field != "weight" ||
 		differences[0].Expected != 80 || differences[0].Actual != 70 {
+		t.Fatalf("runtime pending=%#v needs=%v differences=%#v", pending, needsReconcile, differences)
+	}
+}
+
+func TestAcceptDriftMarksNeedsReconcileWhenVerificationOmitsMapping(t *testing.T) {
+	env := newTestEnvironment()
+	mapping := platform.SyncMapping{
+		UpstreamAssetID: "source-a:channel:7:key:0", TargetID: "target-a", TargetChannelID: "42",
+		Snapshot: platform.ChannelSnapshot{Models: []string{"gpt-4.1"}, Group: "default", Weight: 100},
+	}
+	env.mappings.byTarget["target-a"] = []platform.SyncMapping{mapping}
+	target := env.resolver.targets["target-a"].adapter.(*fakeTarget)
+	target.channels = []platform.Channel{{ID: "42", Name: "live", Models: []string{"gpt-4.1"}, Group: "default", Weight: 80, Enabled: true}}
+	env.reconciler.checkFn = func(ctx context.Context, targetID string, checked platform.TargetAdapter) (reconcile.Report, error) {
+		if _, err := checked.ListChannels(ctx); err != nil {
+			return reconcile.Report{TargetID: targetID}, err
+		}
+		return reconcile.Report{TargetID: targetID, Mappings: []reconcile.MappingState{}}, nil
+	}
+	runtimeState := NewRuntime()
+	router, err := NewRouterWithRuntime(env.dependencies(), runtimeState)
+	if err != nil {
+		t.Fatalf("NewRouterWithRuntime() error = %v", err)
+	}
+
+	body := `{"upstream_asset_id":"source-a:channel:7:key:0","channel_id":"42"}`
+	recorder, envelope := request(t, router, http.MethodPost, "/api/v1/targets/target-a/drift/accept", body, "application/json")
+	if recorder.Code != http.StatusConflict || errorCode(t, envelope) != "needs_reconcile" {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	pending, needsReconcile, differences := runtimeState.matrixState(runtimeKey{assetID: mapping.UpstreamAssetID, targetID: mapping.TargetID})
+	if !needsReconcile || pending.channelID != "42" || len(differences) != 0 {
 		t.Fatalf("runtime pending=%#v needs=%v differences=%#v", pending, needsReconcile, differences)
 	}
 }
