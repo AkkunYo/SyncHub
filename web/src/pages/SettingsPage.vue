@@ -82,7 +82,7 @@ async function saveRuntimeSettings(): Promise<void> {
     </header>
 
     <form class="settings-form" @submit.prevent="saveRuntimeSettings">
-      <div class="settings-groups">
+      <section class="settings-groups" aria-label="运行参数">
         <section class="settings-band settings-surface" aria-labelledby="network-settings-heading">
           <header class="section-header">
             <div>
@@ -174,7 +174,7 @@ async function saveRuntimeSettings(): Promise<void> {
             </div>
           </div>
         </section>
-      </div>
+      </section>
 
       <div class="runtime-actions">
         <div class="settings-feedback" aria-live="polite">
@@ -191,7 +191,12 @@ async function saveRuntimeSettings(): Promise<void> {
             <RotateCcw :size="16" aria-hidden="true" />
             重置修改
           </button>
-          <button class="primary-button" type="submit" :disabled="saving || !isDirty">
+          <button
+            class="primary-button"
+            type="submit"
+            aria-label="保存运行设置"
+            :disabled="saving || !isDirty"
+          >
             <Save :size="16" aria-hidden="true" />
             {{ saving ? '保存中' : '保存设置' }}
           </button>

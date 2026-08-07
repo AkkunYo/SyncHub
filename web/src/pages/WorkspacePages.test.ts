@@ -187,13 +187,16 @@ describe('workspace page information architecture', () => {
     expect(screen.getByRole('heading', { name: '配置漂移' })).toHaveTextContent('漂移修复')
     expect(screen.getByText('当前上游：Source Alpha')).toBeInTheDocument()
     expect(screen.getByRole('toolbar', { name: '漂移扫描' })).toHaveTextContent('1 项待处理')
-    expect(screen.getByRole('button', { name: '扫描漂移' })).toBeEnabled()
+    const scanButton = screen.getByRole('button', { name: '校验全部目标' })
+    expect(scanButton).toHaveTextContent('扫描漂移')
+    expect(scanButton).toBeEnabled()
 
     const driftItem = screen.getByRole('article', { name: 'Primary key / Target Alpha 配置漂移' })
     expect(within(driftItem).getByText('期望值')).toBeInTheDocument()
     expect(within(driftItem).getByText('当前值')).toBeInTheDocument()
     expect(within(driftItem).getByText('100')).toBeInTheDocument()
     expect(within(driftItem).getByText('80')).toBeInTheDocument()
+    expect(within(driftItem).getByText('100 -> 80')).toHaveClass('sr-only')
     expect(driftItem).toHaveTextContent('采纳后将以目标平台当前值作为后续同步基线。')
   })
 
@@ -232,7 +235,9 @@ describe('workspace page information architecture', () => {
 
     const emptyState = screen.getByRole('status', { name: '暂无任务记录' })
     expect(emptyState).toHaveTextContent('同步或校验任务执行后，会在这里保留状态与时间记录。')
-    expect(within(emptyState).getByRole('link', { name: '前往同步工作台' })).toHaveAttribute('href', '/sync')
+    const workspaceLink = within(emptyState).getByRole('link', { name: '返回同步工作台' })
+    expect(workspaceLink).toHaveTextContent('前往同步工作台')
+    expect(workspaceLink).toHaveAttribute('href', '/sync')
     expect(screen.queryByRole('table', { name: '任务状态列表' })).not.toBeInTheDocument()
   })
 
@@ -243,6 +248,7 @@ describe('workspace page information architecture', () => {
     expect(screen.getByRole('heading', { name: '设置' })).toHaveTextContent('系统设置')
     expect(screen.getByRole('region', { name: '网络监听' })).toBeInTheDocument()
     expect(screen.getByRole('region', { name: '任务调度' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '运行参数' })).toBeInTheDocument()
     expect(screen.getByLabelText('监听地址')).toHaveValue('127.0.0.1')
     expect(screen.getByLabelText('端口')).toHaveValue(8888)
     expect(screen.getByLabelText('校验间隔')).toHaveValue('5m0s')
@@ -250,7 +256,9 @@ describe('workspace page information architecture', () => {
     expect(screen.getByLabelText('同步并发')).toHaveValue(4)
     expect(screen.getByText('修改监听地址或端口后，可能需要重启服务并重新连接。')).toBeInTheDocument()
     expect(screen.getByText('支持 s、m、h 等时长单位，例如 5m0s。')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '保存设置' })).toBeDisabled()
+    const saveButton = screen.getByRole('button', { name: '保存运行设置' })
+    expect(saveButton).toHaveTextContent('保存设置')
+    expect(saveButton).toBeDisabled()
     expect(screen.getByRole('button', { name: '重置修改' })).toBeDisabled()
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '添加目标实例' })).not.toBeInTheDocument()
@@ -267,7 +275,7 @@ describe('workspace page information architecture', () => {
     render(SettingsPage, { global: { plugins: [pinia] } })
 
     const host = screen.getByLabelText('监听地址')
-    const save = screen.getByRole('button', { name: '保存设置' })
+    const save = screen.getByRole('button', { name: '保存运行设置' })
     const reset = screen.getByRole('button', { name: '重置修改' })
 
     await user.clear(host)

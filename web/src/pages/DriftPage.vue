@@ -118,7 +118,7 @@ async function reconcileAll(): Promise<void> {
         <button
           class="secondary-button drift-scan-button"
           type="button"
-          aria-label="扫描漂移"
+          aria-label="校验全部目标"
           :disabled="reconciling || store.targets.length === 0 || !store.selectedUpstreamId"
           @click="reconcileAll"
         >
@@ -201,6 +201,9 @@ async function reconcileAll(): Promise<void> {
               <span>
                 <small>期望值</small>
                 <strong>{{ displayValue(difference.expected) }}</strong>
+                <span class="sr-only">
+                  {{ displayValue(difference.expected) }} -> {{ displayValue(difference.actual) }}
+                </span>
               </span>
               <span>
                 <small>当前值</small>

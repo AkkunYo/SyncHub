@@ -79,7 +79,9 @@ describe('TasksPage workflow states', () => {
 
     const emptyState = screen.getByRole('status', { name: '暂无任务记录' })
     expect(emptyState).toHaveTextContent('同步或校验任务执行后，会在这里保留状态与时间记录。')
-    expect(within(emptyState).getByRole('link', { name: '前往同步工作台' })).toHaveAttribute('href', '/sync')
+    const workspaceLink = within(emptyState).getByRole('link', { name: '返回同步工作台' })
+    expect(workspaceLink).toHaveTextContent('前往同步工作台')
+    expect(workspaceLink).toHaveAttribute('href', '/sync')
     expect(screen.queryByRole('table', { name: '任务状态列表' })).not.toBeInTheDocument()
   })
 

@@ -130,7 +130,9 @@ onMounted(() => {
         </span>
         <strong>暂无任务记录</strong>
         <p>同步或校验任务执行后，会在这里保留状态与时间记录。</p>
-        <RouterLink class="secondary-button" to="/sync">前往同步工作台</RouterLink>
+        <RouterLink class="secondary-button" to="/sync" aria-label="返回同步工作台">
+          前往同步工作台
+        </RouterLink>
       </div>
       <template v-else>
         <div class="table-scroll tasks-table-scroll">
