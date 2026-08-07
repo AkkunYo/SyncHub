@@ -645,6 +645,7 @@ func (s *server) acceptDrift(c *gin.Context) {
 		return
 	}
 	if !reportMappingIsSynced(report, targetID, mapping.UpstreamAssetID, mapping.TargetChannelID) {
+		s.markNeedsReconcile(key, request.ChannelID)
 		writeFailure(c, http.StatusConflict, "needs_reconcile")
 		return
 	}
@@ -732,6 +733,7 @@ func (s *server) restoreDrift(c *gin.Context) {
 		return
 	}
 	if !reportMappingIsSynced(report, targetID, mapping.UpstreamAssetID, mapping.TargetChannelID) {
+		s.markNeedsReconcile(key, request.ChannelID)
 		writeFailure(c, http.StatusConflict, "needs_reconcile")
 		return
 	}
