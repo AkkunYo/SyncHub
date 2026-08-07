@@ -1,3 +1,8 @@
+/// <reference types="node" />
+
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
 import { createPinia } from 'pinia'
 import { cleanup, render, screen, within } from '@testing-library/vue'
 import userEvent from '@testing-library/user-event'
@@ -8,6 +13,30 @@ import { useConsoleStore } from '@/stores/console'
 import type { SanitizedConfig } from '@/types'
 
 import ResourceDetailPage from './ResourceDetailPage.vue'
+
+const resourceDetailSource = readFileSync(
+  resolve(process.cwd(), 'src/pages/ResourceDetailPage.vue'),
+  'utf8',
+)
+
+function blockFor(source: string, selector: string): string {
+  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const match = new RegExp(`(?:^|\\n)\\s*${escapedSelector}\\s*\\{`, 'm').exec(source)
+  if (!match) return ''
+  const blockStart = match.index + match[0].lastIndexOf('{')
+
+  let depth = 1
+  for (let index = blockStart + 1; index < source.length; index += 1) {
+    if (source[index] === '{') depth += 1
+    if (source[index] === '}') depth -= 1
+    if (depth === 0) return source.slice(blockStart + 1, index)
+  }
+  return ''
+}
+
+function declarationsFor(source: string, selector: string): string {
+  return blockFor(source, selector).replace(/\s+/g, ' ').trim()
+}
 
 const genericSource = {
   id: 'source-generic',
@@ -404,14 +433,18 @@ describe('Connection resource details', () => {
     await renderDetail('upstream')
 
     const keyRow = await screen.findByRole('row', { name: /主 Key/ })
-    expect(within(keyRow).getByRole('button', { name: '刷新 主 Key 模型' })).toBeInTheDocument()
+    const refreshKeyModels = within(keyRow).getByRole('button', { name: '刷新 主 Key 模型' })
+    const viewKeyModels = within(keyRow).getByRole('button', { name: '查看 主 Key 模型' })
+    expect(within(refreshKeyModels).getByText('刷新模型')).toBeInTheDocument()
+    expect(within(viewKeyModels).getByText('查看模型')).toBeInTheDocument()
     await user.click(within(keyRow).getByRole('button', { name: '查看 主 Key 模型' }))
 
     const modal = await screen.findByRole('dialog', { name: '主 Key 模型' })
     expect(modal).toHaveAttribute('data-presentation', 'modal')
     expect(modal).not.toHaveAttribute('data-side')
-    expect(within(modal).getByText('本次请求可能产生真实费用')).toBeInTheDocument()
-    expect(within(modal).getByText('输入约 20-50 Token / 输出最多 64 Token')).toBeInTheDocument()
+    expect(within(modal).getByRole('group', { name: '模型筛选与排序' })).toBeInTheDocument()
+    expect(within(modal).queryByText('本次请求可能产生真实费用')).not.toBeInTheDocument()
+    expect(within(modal).queryByText('输入约 20-50 Token / 输出最多 64 Token')).not.toBeInTheDocument()
     expect(within(modal).getByText('本次运行')).toBeInTheDocument()
     expect(within(modal).getByText('gpt-4o-mini')).toBeInTheDocument()
     expect(within(modal).getByText('gpt-4.1')).toBeInTheDocument()
@@ -560,5 +593,41 @@ describe('Connection resource details', () => {
     expect(within(zetaRow).getByText('rate_limited')).toBeInTheDocument()
     expect(within(zetaRow).getByText('模板 v1')).toBeInTheDocument()
     expect(within(zetaRow).getByText('42 秒后可重试')).toBeInTheDocument()
+  })
+})
+
+describe('resource detail responsive model management layout', () => {
+  it.each([320, 390])('keeps model discovery controls inside a %ipx modal', (viewportWidth) => {
+    const mobileRules = blockFor(resourceDetailSource, '@media (max-width: 720px)')
+    const commandBar = declarationsFor(mobileRules, '.models-command-bar')
+    const commandChildren = declarationsFor(mobileRules, '.models-command-bar > *')
+    const filterChildren = declarationsFor(mobileRules, '.models-filter-bar > *')
+    const filterBar = declarationsFor(mobileRules, '.models-filter-bar')
+    const search = declarationsFor(mobileRules, '.model-search')
+    const filters = declarationsFor(mobileRules, '.model-filter')
+    const selects = declarationsFor(mobileRules, '.model-filter select')
+    const emptyState = declarationsFor(resourceDetailSource, '.model-state')
+
+    expect(viewportWidth).toBeLessThanOrEqual(720)
+    expect(commandBar).toContain('grid-template-columns: minmax(0, 1fr) auto;')
+    expect(commandChildren).toContain('min-width: 0;')
+    expect(filterChildren).toContain('min-width: 0;')
+    expect(filterBar).toContain('display: grid;')
+    expect(filterBar).toContain('grid-template-columns: repeat(2, minmax(0, 1fr));')
+    expect(search).toContain('grid-column: 1 / -1;')
+    expect(search).toContain('width: 100%;')
+    expect(filters).toContain('width: 100%;')
+    expect(filters).toContain('min-width: 0;')
+    expect(selects).toContain('min-width: 0;')
+    expect(emptyState).toContain('width: 100%;')
+    expect(emptyState).toContain('min-height: min(180px, 32vh);')
+
+    if (viewportWidth === 320) {
+      const narrowRules = blockFor(resourceDetailSource, '@media (max-width: 380px)')
+      expect(declarationsFor(narrowRules, '.models-command-bar'))
+        .toContain('grid-template-columns: minmax(0, 1fr);')
+      expect(declarationsFor(narrowRules, '.models-filter-bar'))
+        .toContain('grid-template-columns: minmax(0, 1fr);')
+    }
   })
 })
