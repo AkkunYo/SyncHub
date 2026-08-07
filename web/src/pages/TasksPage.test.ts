@@ -76,8 +76,10 @@ describe('TasksPage workflow states', () => {
   it('keeps the empty state actionable when history has no records', () => {
     render(TasksPage, { props: { tasks: [] }, global: { stubs: { RouterLink: routerLinkStub } } })
 
-    expect(screen.getByText('暂无任务记录')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: '返回同步工作台' })).toHaveAttribute('href', '/sync')
+    const emptyState = screen.getByRole('status', { name: '暂无任务记录' })
+    expect(emptyState).toHaveTextContent('同步或校验任务执行后，会在这里保留状态与时间记录。')
+    expect(within(emptyState).getByRole('link', { name: '前往同步工作台' })).toHaveAttribute('href', '/sync')
+    expect(screen.queryByRole('table', { name: '任务状态列表' })).not.toBeInTheDocument()
   })
 
   it('renders task rows with status, scope, and detail links', () => {
@@ -101,5 +103,29 @@ describe('TasksPage workflow states', () => {
     expect(within(row).getByRole('link', { name: '资产同步' })).toHaveAttribute('href', '/tasks/sync-42')
     expect(within(row).getByText('2026-08-06 14:20:00')).toBeInTheDocument()
     expect(screen.queryByText('暂无任务记录')).not.toBeInTheDocument()
+  })
+
+  it('provides a semantic mobile task list and keeps long identifiers wrap-safe', () => {
+    const task: TaskRecord = {
+      id: 'sync-20260807-source-with-a-very-long-identifier-target-with-a-very-long-identifier',
+      type: 'sync',
+      scope: 'source-a -> target-a',
+      status: 'running',
+      startedAt: '2026-08-07 09:30:00',
+    }
+    render(TasksPage, {
+      props: { tasks: [task] },
+      global: { stubs: { RouterLink: routerLinkStub } },
+    })
+
+    const mobileList = screen.getByRole('list', { name: '移动端任务状态列表' })
+    const item = within(mobileList).getByRole('listitem', { name: /资产同步 source-a -> target-a/ })
+    expect(within(item).getByText('任务类型')).toBeInTheDocument()
+    expect(within(item).getByText('范围')).toBeInTheDocument()
+    expect(within(item).getByText('状态')).toBeInTheDocument()
+    expect(within(item).getByText('开始时间')).toBeInTheDocument()
+    expect(within(item).getByText('完成时间')).toBeInTheDocument()
+    expect(within(item).getByText(task.id)).toHaveClass('task-id')
+    expect(within(item).getByText('--')).toBeInTheDocument()
   })
 })

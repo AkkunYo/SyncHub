@@ -5,8 +5,10 @@ import { resolve } from 'node:path'
 
 import { createPinia, setActivePinia } from 'pinia'
 import { render, screen, within } from '@testing-library/vue'
-import { beforeEach, describe, expect, it } from 'vitest'
+import userEvent from '@testing-library/user-event'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { api } from '@/api/client'
 import { useConsoleStore } from '@/stores/console'
 import type { Channel, MatrixData, SanitizedConfig } from '@/types'
 import ChannelsPage from './ChannelsPage.vue'
@@ -120,6 +122,10 @@ describe('workspace page information architecture', () => {
     window.sessionStorage.clear()
   })
 
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
   it('turns the empty matrix into a short first-sync checklist', () => {
     const { pinia } = setupStore({ ...configured, targets: [], upstreams: [] })
     render(MatrixPage, {
@@ -179,8 +185,26 @@ describe('workspace page information architecture', () => {
     render(DriftPage, { global: { plugins: [pinia] } })
 
     expect(screen.getByRole('heading', { name: '配置漂移' })).toHaveTextContent('漂移修复')
+    expect(screen.getByText('当前上游：Source Alpha')).toBeInTheDocument()
     expect(screen.getByRole('toolbar', { name: '漂移扫描' })).toHaveTextContent('1 项待处理')
-    expect(screen.getByRole('button', { name: '校验全部目标' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '扫描漂移' })).toBeEnabled()
+
+    const driftItem = screen.getByRole('article', { name: 'Primary key / Target Alpha 配置漂移' })
+    expect(within(driftItem).getByText('期望值')).toBeInTheDocument()
+    expect(within(driftItem).getByText('当前值')).toBeInTheDocument()
+    expect(within(driftItem).getByText('100')).toBeInTheDocument()
+    expect(within(driftItem).getByText('80')).toBeInTheDocument()
+    expect(driftItem).toHaveTextContent('采纳后将以目标平台当前值作为后续同步基线。')
+  })
+
+  it('explains what the latest clean drift scan means', () => {
+    const { pinia, store } = setupStore()
+    store.matrix = { ...driftMatrix, rows: [] }
+    render(DriftPage, { global: { plugins: [pinia] } })
+
+    expect(screen.getByText('当前没有配置漂移')).toBeInTheDocument()
+    expect(screen.getByText('最近一次扫描未发现差异，当前配置与目标状态一致。')).toBeInTheDocument()
+    expect(screen.getByRole('toolbar', { name: '漂移扫描' })).toHaveTextContent('0 项待处理')
   })
 
   it('routes missing drift prerequisites to their owning connection pages', () => {
@@ -200,35 +224,70 @@ describe('workspace page information architecture', () => {
     expect(screen.getByRole('link', { name: '管理目标实例' })).toHaveAttribute('href', '/targets')
   })
 
-  it('uses an honest empty task table with type and status columns', () => {
+  it('uses a guided task empty state without rendering an empty desktop table', () => {
     render(TasksPage, {
-      props: { loading: false },
+      props: { tasks: [] },
       global: { stubs: { RouterLink: routerLinkStub } },
     })
 
-    const table = screen.getByRole('table', { name: '任务状态列表' })
-    expect(within(table).getByRole('columnheader', { name: '任务类型' })).toBeInTheDocument()
-    expect(within(table).getByRole('columnheader', { name: '范围' })).toBeInTheDocument()
-    expect(within(table).getByRole('columnheader', { name: '状态' })).toBeInTheDocument()
-    expect(within(table).getByRole('columnheader', { name: '开始时间' })).toBeInTheDocument()
-    expect(within(table).getByText('暂无任务记录')).toBeInTheDocument()
-    expect(within(table).getByRole('link', { name: '返回同步工作台' })).toHaveAttribute('href', '/sync')
+    const emptyState = screen.getByRole('status', { name: '暂无任务记录' })
+    expect(emptyState).toHaveTextContent('同步或校验任务执行后，会在这里保留状态与时间记录。')
+    expect(within(emptyState).getByRole('link', { name: '前往同步工作台' })).toHaveAttribute('href', '/sync')
+    expect(screen.queryByRole('table', { name: '任务状态列表' })).not.toBeInTheDocument()
   })
 
-  it('keeps system settings limited to runtime parameters', () => {
+  it('groups system settings by operational purpose and starts pristine', () => {
     const { pinia } = setupStore()
     render(SettingsPage, { global: { plugins: [pinia] } })
 
     expect(screen.getByRole('heading', { name: '设置' })).toHaveTextContent('系统设置')
-    expect(screen.getByRole('region', { name: '运行参数' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '网络监听' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '任务调度' })).toBeInTheDocument()
     expect(screen.getByLabelText('监听地址')).toHaveValue('127.0.0.1')
     expect(screen.getByLabelText('端口')).toHaveValue(8888)
     expect(screen.getByLabelText('校验间隔')).toHaveValue('5m0s')
     expect(screen.getByLabelText('请求超时')).toHaveValue('15s')
     expect(screen.getByLabelText('同步并发')).toHaveValue(4)
+    expect(screen.getByText('修改监听地址或端口后，可能需要重启服务并重新连接。')).toBeInTheDocument()
+    expect(screen.getByText('支持 s、m、h 等时长单位，例如 5m0s。')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '保存设置' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '重置修改' })).toBeDisabled()
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '添加目标实例' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '添加上游实例' })).not.toBeInTheDocument()
+  })
+
+  it('enables settings actions only for changes and returns to pristine after reset or save', async () => {
+    const { pinia } = setupStore()
+    const updateApp = vi.spyOn(api, 'updateApp').mockResolvedValue({
+      ...appSettings,
+      host: '0.0.0.0',
+    })
+    const user = userEvent.setup()
+    render(SettingsPage, { global: { plugins: [pinia] } })
+
+    const host = screen.getByLabelText('监听地址')
+    const save = screen.getByRole('button', { name: '保存设置' })
+    const reset = screen.getByRole('button', { name: '重置修改' })
+
+    await user.clear(host)
+    await user.type(host, '0.0.0.0')
+    expect(save).toBeEnabled()
+    expect(reset).toBeEnabled()
+
+    await user.click(reset)
+    expect(host).toHaveValue('127.0.0.1')
+    expect(save).toBeDisabled()
+    expect(reset).toBeDisabled()
+
+    await user.clear(host)
+    await user.type(host, '0.0.0.0')
+    await user.click(save)
+
+    expect(updateApp).toHaveBeenCalledWith(expect.objectContaining({ host: '0.0.0.0' }))
+    expect(await screen.findByRole('status')).toHaveTextContent('运行设置已保存')
+    expect(save).toBeDisabled()
+    expect(reset).toBeDisabled()
   })
 })
 
@@ -256,6 +315,14 @@ describe('workspace page responsive layout contracts', () => {
     for (const source of pageSources.slice(0, 4)) {
       expect(source).toContain('@media (max-width: 620px)')
     }
+  })
+
+  it('switches task history to a divided mobile list and wraps long task identifiers', () => {
+    const tasksPage = pageSources[3]
+    expect(tasksPage).toContain('class="tasks-mobile-list"')
+    expect(tasksPage).toMatch(/\.task-id\s*\{[^}]*overflow-wrap:\s*anywhere;/s)
+    expect(tasksPage).toMatch(/@media \(max-width: 620px\)[\s\S]*\.tasks-table-scroll\s*\{[^}]*display:\s*none;/)
+    expect(tasksPage).toMatch(/@media \(max-width: 620px\)[\s\S]*\.tasks-mobile-list\s*\{[^}]*display:\s*block;/)
   })
 
   it('removes card framing from settings sections', () => {
